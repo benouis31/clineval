@@ -39,14 +39,16 @@ export default function AdminPage() {
   const [editReviewer, setEditReviewer] = useState<any | null>(null);
   const [assignReviewerId, setAssignReviewerId] = useState('');
   const [assignCaseId, setAssignCaseId] = useState('');
+  const [messages, setMessages] = useState<any[]>([]);
 
   async function load() {
     setLoading(true);
-    const [{ data: assignmentData }, { data: reviewerData }, { data: caseData }, { data: responseData }] = await Promise.all([
+    const [{ data: assignmentData }, { data: reviewerData }, { data: caseData }, { data: responseData }, { data: messageData }] = await Promise.all([
       supabase.from('assignments').select('*, reviewers(*), cases(*)').order('updated_at', { ascending: false }),
       supabase.from('reviewers').select('*').order('created_at', { ascending: true }),
-      supabase.from('cases').select('id, case_code, title, disease_category, difficulty_level').order('created_at', { ascending: false }),
-      supabase.from('responses').select('*')
+      supabase.from('cases').select('id, case_code, title, disease_category, difficulty_level, is_active').order('created_at', { ascending: false }),
+      supabase.from('responses').select('*'),
+      supabase.from('reviewer_messages').select('*, reviewers(code, display_name, email), cases(case_code, title)').order('created_at', { ascending: false })
     ]);
 
     const responsesByAssignment = new Map(
@@ -62,6 +64,7 @@ export default function AdminPage() {
     const reviewerRows = reviewerData || [];
     setReviewers(reviewerRows);
     setCases(caseData || []);
+    setMessages(messageData || []);
     setNewReviewer(prev => ({ ...prev, code: prev.code || nextReviewerCode(reviewerRows) }));
     setLoading(false);
   }
@@ -106,6 +109,23 @@ export default function AdminPage() {
     if (error) return alert(error.message);
     setAssignReviewerId('');
     setAssignCaseId('');
+    await load();
+  }
+
+  async function toggleCaseActive(caseRow: any, nextActive: boolean) {
+    const action = nextActive ? 'activate' : 'deactivate';
+    if (!confirm(`${action.charAt(0).toUpperCase() + action.slice(1)} ${caseRow.case_code}?`)) return;
+
+    const { error } = await supabase
+      .from('cases')
+      .update({ is_active: nextActive })
+      .eq('id', caseRow.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
     await load();
   }
 
@@ -206,6 +226,41 @@ export default function AdminPage() {
         <label>Case<select value={assignCaseId} onChange={e => setAssignCaseId(e.target.value)}><option value="">Select case</option>{cases.map(c => <option key={c.id} value={c.id}>{c.case_code} - {c.title}</option>)}</select></label>
       </div>
       <button className="btn btn-primary" onClick={assignCase}>Assign selected case</button>
+    </div>
+
+    <div className="card">
+      <h2>Case Activation</h2>
+      <p className="small">Only active cases are available for expert questionnaire review.</p>
+      <table className="table">
+        <thead><tr><th>Case</th><th>Title</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>{cases.map(c => <tr key={c.id}>
+          <td><strong>{c.case_code}</strong></td>
+          <td>{c.title}</td>
+          <td><span className={'status-pill ' + (c.is_active ? 'status-submitted' : 'status-assigned')}>{c.is_active ? 'Active' : 'Inactive'}</span></td>
+          <td>
+            {c.is_active ? (
+              <button className="btn btn-secondary btn-small" onClick={() => toggleCaseActive(c, false)}>Deactivate</button>
+            ) : (
+              <button className="btn btn-primary btn-small" onClick={() => toggleCaseActive(c, true)}>Activate</button>
+            )}
+          </td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+
+    <div className="card">
+      <h2>Correction Requests</h2>
+      {messages.length === 0 ? <p className="small">No correction notes submitted.</p> : (
+        <table className="table">
+          <thead><tr><th>Reviewer</th><th>Case</th><th>Message</th><th>Submitted</th></tr></thead>
+          <tbody>{messages.map(m => <tr key={m.id}>
+            <td><strong>{m.reviewers?.display_name || '-'}</strong><br/><span className="small">{m.reviewers?.code || '-'}</span></td>
+            <td>{m.cases?.case_code || '-'}</td>
+            <td>{m.message}</td>
+            <td>{fmt(m.created_at)}</td>
+          </tr>)}</tbody>
+        </table>
+      )}
     </div>
 
     <div className="stats-grid">

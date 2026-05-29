@@ -35,28 +35,42 @@ export default function ReviewerPage() {
   const [saved, setSaved] = useState('Not saved');
   const [lastSavedAt, setLastSavedAt] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [correctionMessage, setCorrectionMessage] = useState('');
 
   async function login() {
     setLoading(true);
     const { data: reviewerData, error } = await supabase.from('reviewers').select('*').eq('code', code.trim()).single();
     setLoading(false);
-    if (error || !reviewerData) { alert('Reviewer code not found'); return; }
+
+    if (error || !reviewerData) {
+      alert('Reviewer code not found');
+      return;
+    }
+
     setReviewer(reviewerData);
 
     const { data: assignmentData, error: aerr } = await supabase
       .from('assignments')
       .select('*, cases(*)')
       .eq('reviewer_id', reviewerData.id)
-      .neq('status', 'submitted')
       .order('updated_at', { ascending: false })
       .limit(1)
       .single();
 
-    if (aerr || !assignmentData) { alert('No active assignment found'); return; }
+    if (aerr || !assignmentData) {
+      alert('No active assignment found');
+      return;
+    }
+
     setAssignment(assignmentData);
     setCheckpointIndex(Math.max(0, Math.min(TOTAL_STEPS - 1, (assignmentData.current_checkpoint || 1) - 1)));
 
-    const { data: responseData } = await supabase.from('responses').select('*').eq('assignment_id', assignmentData.id).single();
+    const { data: responseData } = await supabase
+      .from('responses')
+      .select('*')
+      .eq('assignment_id', assignmentData.id)
+      .single();
+
     setAnswers(responseData?.answers || {});
     setLastSavedAt(responseData?.updated_at || assignmentData.updated_at || '');
     setSaved(responseData?.updated_at ? 'Saved' : 'Ready');
@@ -64,8 +78,10 @@ export default function ReviewerPage() {
 
   async function persist(nextAnswers = answers, nextCheckpointIndex = checkpointIndex, nextStatus = 'in_progress') {
     if (!assignment) return;
+
     setSaved('Saving...');
     const now = new Date().toISOString();
+
     await supabase.from('responses').upsert({
       assignment_id: assignment.id,
       reviewer_id: assignment.reviewer_id,
@@ -74,7 +90,16 @@ export default function ReviewerPage() {
       status: 'draft',
       updated_at: now
     }, { onConflict: 'assignment_id' });
-    await supabase.from('assignments').update({ current_checkpoint: nextCheckpointIndex + 1, status: nextStatus, updated_at: now }).eq('id', assignment.id);
+
+    await supabase
+      .from('assignments')
+      .update({
+        current_checkpoint: nextCheckpointIndex + 1,
+        status: nextStatus,
+        updated_at: now
+      })
+      .eq('id', assignment.id);
+
     setAssignment({ ...assignment, current_checkpoint: nextCheckpointIndex + 1, status: nextStatus });
     setLastSavedAt(now);
     setSaved('Saved');
@@ -132,9 +157,12 @@ export default function ReviewerPage() {
 
   async function submitFinal() {
     if (!assignment) return;
+
     const confirmSubmit = window.confirm('Submit final evaluation? After final submission, this assignment will be locked for the reviewer.');
     if (!confirmSubmit) return;
+
     const now = new Date().toISOString();
+
     await supabase.from('responses').upsert({
       assignment_id: assignment.id,
       reviewer_id: assignment.reviewer_id,
@@ -144,14 +172,153 @@ export default function ReviewerPage() {
       updated_at: now,
       submitted_at: now
     }, { onConflict: 'assignment_id' });
-    await supabase.from('assignments').update({ status: 'submitted', current_checkpoint: 5, updated_at: now }).eq('id', assignment.id);
+
+    await supabase
+      .from('assignments')
+      .update({
+        status: 'submitted',
+        current_checkpoint: 5,
+        updated_at: now
+      })
+      .eq('id', assignment.id);
+
     alert('Evaluation submitted. Thank you.');
-    setAssignment(null);
+    setAssignment({ ...assignment, status: 'submitted', current_checkpoint: 5 });
+    setSaved('Submitted');
+    setLastSavedAt(now);
   }
 
-  if (!reviewer) return <main className="container"><div className="card"><h1>ClinEval reviewer access</h1><p>Enter your reviewer code.</p><input className="input" value={code} onChange={e => setCode(e.target.value)} placeholder="e.g. PROF_01" onKeyDown={e => { if (e.key === 'Enter') login(); }} /><br/><br/><button className="btn btn-primary" onClick={login} disabled={loading}>{loading ? 'Checking...' : 'Continue'}</button></div></main>;
+  async function sendCorrectionMessage() {
+    if (!assignment || !reviewer) return;
 
-  if (!assignment) return <main className="container"><div className="card"><h1>No active assignment</h1><p>Contact the study coordinator.</p></div></main>;
+    if (!correctionMessage.trim()) {
+      alert('Please write a correction note first.');
+      return;
+    }
+
+    const { error } = await supabase.from('reviewer_messages').insert({
+      assignment_id: assignment.id,
+      reviewer_id: reviewer.id,
+      case_id: assignment.case_id,
+      message: correctionMessage.trim(),
+      message_type: 'correction_request'
+    });
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setCorrectionMessage('');
+    alert('Your correction note was sent to the study coordinator.');
+  }
+
+  if (!reviewer) {
+    return (
+      <main className="container">
+        <div className="card">
+          <h1>ClinEval reviewer access</h1>
+          <p>Enter your reviewer code.</p>
+          <input
+            className="input"
+            value={code}
+            onChange={e => setCode(e.target.value)}
+            placeholder="e.g. PROF_01"
+            onKeyDown={e => {
+              if (e.key === 'Enter') login();
+            }}
+          />
+          <br /><br />
+          <button className="btn btn-primary" onClick={login} disabled={loading}>
+            {loading ? 'Checking...' : 'Continue'}
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  if (!assignment) {
+    return (
+      <main className="container">
+        <div className="card">
+          <h1>No active assignment</h1>
+          <p>Contact the study coordinator.</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (assignment.status === 'submitted') {
+    return (
+      <main>
+        <div className="topbar">
+          <strong>ClinEval</strong>
+          <div className="topbar-right">
+            <span className="badge">Submitted</span>
+            <span className="small">Submitted / last saved: {formatTime(lastSavedAt)}</span>
+            <button className="btn btn-secondary btn-small" onClick={downloadMyAnnotation}>
+              Download annotation
+            </button>
+          </div>
+        </div>
+
+        <div className="container">
+          <div className="card">
+            <h1>Evaluation submitted</h1>
+            <p>Thank you. Your evaluation has been submitted successfully.</p>
+            <p className="small">
+              Reviewer: {reviewer.display_name} | Case: {assignment.cases?.case_code} | Model: blinded
+            </p>
+            <div className="row">
+              <button className="btn btn-secondary" onClick={downloadMyAnnotation}>
+                Download my annotation
+              </button>
+            </div>
+          </div>
+
+          <div className="card">
+            <h2>Your submitted annotation</h2>
+            <p className="small">This is a read-only copy of the answers currently stored for this assignment.</p>
+            <pre style={{ whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{JSON.stringify(answers, null, 2)}</pre>
+          </div>
+
+          <div className="card">
+            <h2>Correction or mistake note</h2>
+            <p className="small">
+              If you noticed a mistake after submission, write a message to the study coordinator.
+              This will not overwrite your submitted evaluation.
+            </p>
+            <textarea
+              className="input"
+              value={correctionMessage}
+              onChange={e => setCorrectionMessage(e.target.value)}
+              placeholder="Describe the correction or issue..."
+            />
+            <br /><br />
+            <button className="btn btn-primary" onClick={sendCorrectionMessage}>
+              Send correction note
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!assignment.cases?.is_active) {
+    return (
+      <main className="container">
+        <div className="card">
+          <h1>Case not yet released</h1>
+          <p>
+            This case has been assigned to you but has not yet been activated by the study coordinator.
+          </p>
+          <p className="small">
+            Please return later or contact the study coordinator.
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   const cp = checkpoints[checkpointIndex];
   const caseData = assignment.cases;
@@ -162,35 +329,156 @@ export default function ReviewerPage() {
   const answered = countAnswered(answers);
   const totalVisible = visibleQuestions(answers).length;
 
-  return <main>
-    <div className="topbar"><strong>ClinEval</strong><div className="topbar-right"><span className="badge">{saved}</span><span className="small">Last saved: {formatTime(lastSavedAt)}</span><button className="btn btn-secondary btn-small" onClick={saveDraft}>Save draft</button><button className="btn btn-secondary btn-small" onClick={downloadMyAnnotation}>Download annotation</button></div></div>
-    <div className="container">
-      <div className="card">
-        <div className="small">Reviewer: {reviewer.display_name} | Case: {caseData?.case_code} | Model: blinded</div>
-        <h1>{cp.title}</h1>
-        <div className="progress-meta"><span>Checkpoint {stepNumber} of 4</span><span>{answered} of {totalVisible} visible questions answered</span><span>Estimated remaining time: {Math.max(2, (TOTAL_STEPS - stepNumber + 1) * 3)}–{Math.max(4, (TOTAL_STEPS - stepNumber + 1) * 5)} min</span></div>
-        <div className="progress-bar"><div className="progress-fill" style={{ width: `${progressPct}%` }} /></div>
-        <div className="warning"><strong>IMPORTANT:</strong><br />{cp.instruction}<br />Evaluate ONLY the information displayed on this page.</div>
+  return (
+    <main>
+      <div className="topbar">
+        <strong>ClinEval</strong>
+        <div className="topbar-right">
+          <span className="badge">{saved}</span>
+          <span className="small">Last saved: {formatTime(lastSavedAt)}</span>
+          <button className="btn btn-secondary btn-small" onClick={saveDraft}>
+            Save draft
+          </button>
+          <button className="btn btn-secondary btn-small" onClick={downloadMyAnnotation}>
+            Download annotation
+          </button>
+        </div>
       </div>
-      <div className="card"><h3>Case vignette</h3><p>{vignette}</p><h3>Model output</h3><p>{modelOutput}</p></div>
-      <div className="card">
-        <h3>Expert Questionnaire</h3>
-        <p className="small">Likert scale: 1 = Strongly disagree · 2 = Disagree · 3 = Neutral / Undecided · 4 = Agree · 5 = Strongly agree · Not applicable</p>
-        {cp.questions.map((q: any) => {
-          if (q.conditional && answers[q.conditional.question] !== q.conditional.value) return null;
-          return <div className="question" key={q.id}>
-            <strong>{q.text}</strong>
-            {q.description && <p className="small">{q.description}</p>}
-            {q.type === 'likert' && <OptionGroup value={answers[q.id]} options={likertOptions} onChange={v => saveAnswer(q.id, v)} />}
-            {q.type === 'yesno' && <OptionGroup value={answers[q.id]} options={['Yes', 'No']} onChange={v => saveAnswer(q.id, v)} />}
-            {q.type === 'harm' && <><OptionGroup value={answers[q.id]} options={harmOptionsForQuestion(q.id)} onChange={v => saveAnswer(q.id, v)} />{answers[q.id] === 'Severe harm likely' && <textarea className="input harm-explanation" placeholder="Optional: briefly explain the potential source of harm." value={answers[q.id + '_explanation'] || ''} onChange={e => saveAnswer(q.id + '_explanation', e.target.value)} />}</>}
-            {q.type === 'text' && <textarea className="input" value={answers[q.id] || ''} onChange={e => saveAnswer(q.id, e.target.value)} placeholder="Free text" />}
-          </div>;
-        })}
-        <div className="question"><strong>Private reviewer notes</strong><p className="small">Optional. These are saved for your own review and are not part of the primary questionnaire.</p><textarea className="input" value={answers[`private_notes_step_${stepNumber}`] || ''} onChange={e => saveAnswer(`private_notes_step_${stepNumber}`, e.target.value)} placeholder="Private notes for yourself..." /></div>
-        <br />
-        <div className="row nav-row"><button className="btn btn-secondary" disabled={checkpointIndex === 0} onClick={() => goToStep(checkpointIndex - 1)}>Back</button><button className="btn btn-secondary" onClick={saveDraft}>Save draft</button><button className="btn btn-secondary" onClick={downloadMyAnnotation}>Download annotation</button>{checkpointIndex < checkpoints.length - 1 ? <button className="btn btn-primary" onClick={() => goToStep(checkpointIndex + 1)}>Save & continue</button> : <button className="btn btn-primary" onClick={submitFinal}>Final submit</button>}</div>
+
+      <div className="container">
+        <div className="card">
+          <div className="small">
+            Reviewer: {reviewer.display_name} | Case: {caseData?.case_code} | Model: blinded
+          </div>
+          <h1>{cp.title}</h1>
+          <div className="progress-meta">
+            <span>Checkpoint {stepNumber} of 4</span>
+            <span>{answered} of {totalVisible} visible questions answered</span>
+            <span>
+              Estimated remaining time: {Math.max(2, (TOTAL_STEPS - stepNumber + 1) * 3)}–{Math.max(4, (TOTAL_STEPS - stepNumber + 1) * 5)} min
+            </span>
+          </div>
+          <div className="progress-bar">
+            <div className="progress-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <div className="warning">
+            <strong>IMPORTANT:</strong><br />
+            {cp.instruction}<br />
+            Evaluate ONLY the information displayed on this page.
+          </div>
+        </div>
+
+        <div className="card">
+          <h3>Case vignette</h3>
+          <p>{vignette}</p>
+          <h3>Model output</h3>
+          <p>{modelOutput}</p>
+        </div>
+
+        <div className="card">
+          <h3>Expert Questionnaire</h3>
+          <p className="small">
+            Likert scale: 1 = Strongly disagree · 2 = Disagree · 3 = Neutral / Undecided · 4 = Agree · 5 = Strongly agree · Not applicable
+          </p>
+
+          {cp.questions.map((q: any) => {
+            if (q.conditional && answers[q.conditional.question] !== q.conditional.value) return null;
+
+            return (
+              <div className="question" key={q.id}>
+                <strong>{q.text}</strong>
+                {q.description && <p className="small">{q.description}</p>}
+
+                {q.type === 'likert' && (
+                  <OptionGroup
+                    value={answers[q.id]}
+                    options={likertOptions}
+                    onChange={v => saveAnswer(q.id, v)}
+                  />
+                )}
+
+                {q.type === 'yesno' && (
+                  <OptionGroup
+                    value={answers[q.id]}
+                    options={['Yes', 'No']}
+                    onChange={v => saveAnswer(q.id, v)}
+                  />
+                )}
+
+                {q.type === 'harm' && (
+                  <>
+                    <OptionGroup
+                      value={answers[q.id]}
+                      options={harmOptionsForQuestion(q.id)}
+                      onChange={v => saveAnswer(q.id, v)}
+                    />
+                    {answers[q.id] === 'Severe harm likely' && (
+                      <textarea
+                        className="input harm-explanation"
+                        placeholder="Optional: briefly explain the potential source of harm."
+                        value={answers[q.id + '_explanation'] || ''}
+                        onChange={e => saveAnswer(q.id + '_explanation', e.target.value)}
+                      />
+                    )}
+                  </>
+                )}
+
+                {q.type === 'text' && (
+                  <textarea
+                    className="input"
+                    value={answers[q.id] || ''}
+                    onChange={e => saveAnswer(q.id, e.target.value)}
+                    placeholder="Free text"
+                  />
+                )}
+              </div>
+            );
+          })}
+
+          <div className="question">
+            <strong>Private reviewer notes</strong>
+            <p className="small">
+              Optional. These are saved for your own review and are not part of the primary questionnaire.
+            </p>
+            <textarea
+              className="input"
+              value={answers[`private_notes_step_${stepNumber}`] || ''}
+              onChange={e => saveAnswer(`private_notes_step_${stepNumber}`, e.target.value)}
+              placeholder="Private notes for yourself..."
+            />
+          </div>
+
+          <br />
+
+          <div className="row nav-row">
+            <button
+              className="btn btn-secondary"
+              disabled={checkpointIndex === 0}
+              onClick={() => goToStep(checkpointIndex - 1)}
+            >
+              Back
+            </button>
+
+            <button className="btn btn-secondary" onClick={saveDraft}>
+              Save draft
+            </button>
+
+            <button className="btn btn-secondary" onClick={downloadMyAnnotation}>
+              Download annotation
+            </button>
+
+            {checkpointIndex < checkpoints.length - 1 ? (
+              <button className="btn btn-primary" onClick={() => goToStep(checkpointIndex + 1)}>
+                Save & continue
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={submitFinal}>
+                Final submit
+              </button>
+            )}
+          </div>
+        </div>
       </div>
-    </div>
-  </main>;
+    </main>
+  );
 }

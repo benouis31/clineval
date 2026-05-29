@@ -42,12 +42,23 @@ export default function AdminPage() {
 
   async function load() {
     setLoading(true);
-    const [{ data: assignmentData }, { data: reviewerData }, { data: caseData }] = await Promise.all([
-      supabase.from('assignments').select('*, reviewers(*), cases(*), responses(*)').order('updated_at', { ascending: false }),
+    const [{ data: assignmentData }, { data: reviewerData }, { data: caseData }, { data: responseData }] = await Promise.all([
+      supabase.from('assignments').select('*, reviewers(*), cases(*)').order('updated_at', { ascending: false }),
       supabase.from('reviewers').select('*').order('created_at', { ascending: true }),
-      supabase.from('cases').select('id, case_code, title, disease_category, difficulty_level').order('created_at', { ascending: false })
+      supabase.from('cases').select('id, case_code, title, disease_category, difficulty_level').order('created_at', { ascending: false }),
+      supabase.from('responses').select('*')
     ]);
-    setRows(assignmentData || []);
+
+    const responsesByAssignment = new Map(
+      (responseData || []).map((resp: any) => [resp.assignment_id, resp])
+    );
+
+    const mergedRows = (assignmentData || []).map((assignment: any) => ({
+      ...assignment,
+      response: responsesByAssignment.get(assignment.id) || null
+    }));
+
+    setRows(mergedRows);
     const reviewerRows = reviewerData || [];
     setReviewers(reviewerRows);
     setCases(caseData || []);
@@ -115,7 +126,7 @@ export default function AdminPage() {
     const body = rows.map(r => [
       r.id, r.reviewers?.code || '', r.reviewers?.display_name || '', r.reviewers?.email || '',
       r.cases?.case_code || '', statusLabel(r), r.current_checkpoint, progressPct(r), r.updated_at || '',
-      r.responses?.[0]?.submitted_at || ''
+      r.response?.submitted_at || ''
     ].map(v => `"${String(v).replaceAll('"','""')}"`).join(','));
     const blob = new Blob([[header.join(','), ...body].join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -124,7 +135,7 @@ export default function AdminPage() {
   }
 
   function exportResponses() {
-    const payload = rows.map(r => ({ assignment_id: r.id, reviewer: r.reviewers, case: r.cases, assignment_status: r.status, current_checkpoint: r.current_checkpoint, response: r.responses?.[0] || null }));
+    const payload = rows.map(r => ({ assignment_id: r.id, reviewer: r.reviewers, case: r.cases, assignment_status: r.status, current_checkpoint: r.current_checkpoint, response: r.response || null }));
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = 'clineval-responses.json'; a.click();

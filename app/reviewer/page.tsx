@@ -98,6 +98,38 @@ export default function ReviewerPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  function downloadMyAnnotation() {
+    if (!assignment || !reviewer) return;
+
+    const payload = {
+      reviewer_code: reviewer.code,
+      reviewer_name: reviewer.display_name,
+      case_code: assignment.cases?.case_code,
+      case_title: assignment.cases?.title,
+      assignment_status: assignment.status,
+      current_checkpoint: checkpointIndex + 1,
+      answers,
+      exported_at: new Date().toISOString()
+    };
+
+    const blob = new Blob(
+      [JSON.stringify(payload, null, 2)],
+      { type: 'application/json' }
+    );
+
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${reviewer.code}_${assignment.cases?.case_code}_annotation.json`;
+
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+
+    URL.revokeObjectURL(url);
+  }
+
   async function submitFinal() {
     if (!assignment) return;
     const confirmSubmit = window.confirm('Submit final evaluation? After final submission, this assignment will be locked for the reviewer.');
@@ -131,7 +163,7 @@ export default function ReviewerPage() {
   const totalVisible = visibleQuestions(answers).length;
 
   return <main>
-    <div className="topbar"><strong>ClinEval</strong><div className="topbar-right"><span className="badge">{saved}</span><span className="small">Last saved: {formatTime(lastSavedAt)}</span><button className="btn btn-secondary btn-small" onClick={saveDraft}>Save draft</button></div></div>
+    <div className="topbar"><strong>ClinEval</strong><div className="topbar-right"><span className="badge">{saved}</span><span className="small">Last saved: {formatTime(lastSavedAt)}</span><button className="btn btn-secondary btn-small" onClick={saveDraft}>Save draft</button><button className="btn btn-secondary btn-small" onClick={downloadMyAnnotation}>Download annotation</button></div></div>
     <div className="container">
       <div className="card">
         <div className="small">Reviewer: {reviewer.display_name} | Case: {caseData?.case_code} | Model: blinded</div>
@@ -157,7 +189,7 @@ export default function ReviewerPage() {
         })}
         <div className="question"><strong>Private reviewer notes</strong><p className="small">Optional. These are saved for your own review and are not part of the primary questionnaire.</p><textarea className="input" value={answers[`private_notes_step_${stepNumber}`] || ''} onChange={e => saveAnswer(`private_notes_step_${stepNumber}`, e.target.value)} placeholder="Private notes for yourself..." /></div>
         <br />
-        <div className="row nav-row"><button className="btn btn-secondary" disabled={checkpointIndex === 0} onClick={() => goToStep(checkpointIndex - 1)}>Back</button><button className="btn btn-secondary" onClick={saveDraft}>Save draft</button>{checkpointIndex < checkpoints.length - 1 ? <button className="btn btn-primary" onClick={() => goToStep(checkpointIndex + 1)}>Save & continue</button> : <button className="btn btn-primary" onClick={submitFinal}>Final submit</button>}</div>
+        <div className="row nav-row"><button className="btn btn-secondary" disabled={checkpointIndex === 0} onClick={() => goToStep(checkpointIndex - 1)}>Back</button><button className="btn btn-secondary" onClick={saveDraft}>Save draft</button><button className="btn btn-secondary" onClick={downloadMyAnnotation}>Download annotation</button>{checkpointIndex < checkpoints.length - 1 ? <button className="btn btn-primary" onClick={() => goToStep(checkpointIndex + 1)}>Save & continue</button> : <button className="btn btn-primary" onClick={submitFinal}>Final submit</button>}</div>
       </div>
     </div>
   </main>;

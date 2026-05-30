@@ -192,21 +192,9 @@ export default function AdminPage() {
   }
 
   async function toggleQuestionnaire(row: any, enable: boolean) {
-    if (enable) {
-      // FIX: re-fetch case submission fresh rather than relying on potentially stale state
-      const { data: freshSubmission } = await supabase
-        .from('case_submissions')
-        .select('status')
-        .eq('assignment_id', row.id)
-        .maybeSingle();
-      if (!freshSubmission || freshSubmission.status !== 'submitted') {
-        alert('Cannot activate: reviewer has not submitted the independent case assessment.');
-        return;
-      }
-      if (!row.cases?.is_active) {
-        alert('Cannot activate: case is inactive. Please activate the case first.');
-        return;
-      }
+    if (enable && !row.cases?.is_active) {
+      alert('Cannot activate: case is inactive. Please activate the case first.');
+      return;
     }
     setUpdating(row.id);
     const { error } = await supabase.from('assignments').update({ questionnaire_enabled: enable }).eq('id', row.id);
@@ -286,18 +274,39 @@ export default function AdminPage() {
     });
   }
 
+  // Stats for summary bar
+  const totalReviewers = reviewers.length;
+  const totalSubmitted = rows.filter(r => r.status === 'submitted').length;
+  const totalInProgress = rows.filter(r => r.status === 'in_progress').length;
+  const totalAssigned = rows.filter(r => r.status === 'assigned' || r.status === 'not_started').length;
+  const totalCorrections = messages.length;
+
   return (
-    <main className="container">
-      <div className="card">
-        <h1>ClinEval Admin Dashboard</h1>
-        {loadError && (
-          <div className="warning" style={{ marginBottom: 12 }}>{loadError}</div>
-        )}
-        <div className="row">
-          <button className="btn btn-secondary" onClick={load} disabled={loading}>
-            {loading ? 'Loading…' : 'Refresh'}
-          </button>
-          <button className="btn btn-primary" onClick={exportCsv}>Export CSV</button>
+    <main className="container-wide">
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          <h1 style={{ margin: 0, fontSize: 22 }}>ClinEval Admin Dashboard</h1>
+          <div className="row">
+            <button className="btn btn-secondary btn-small" onClick={load} disabled={loading}>
+              {loading ? 'Loading…' : 'Refresh'}
+            </button>
+            <button className="btn btn-primary btn-small" onClick={exportCsv}>Export CSV</button>
+          </div>
+        </div>
+        {loadError && <div className="alert alert-warn" style={{ marginTop: 10 }}>{loadError}</div>}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10, marginTop: 16 }}>
+          {[
+            { label: 'Reviewers', value: totalReviewers, color: 'var(--text)' },
+            { label: 'Submitted', value: totalSubmitted, color: 'var(--accent)' },
+            { label: 'In progress', value: totalInProgress, color: 'var(--warn)' },
+            { label: 'Assigned', value: totalAssigned, color: 'var(--muted)' },
+            { label: 'Corrections', value: totalCorrections, color: totalCorrections > 0 ? 'var(--danger)' : 'var(--muted)' },
+          ].map(s => (
+            <div key={s.label} style={{ background: '#f9f8f5', borderRadius: 10, padding: '12px 14px', border: '1px solid var(--line)' }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{s.label}</div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -393,24 +402,23 @@ export default function AdminPage() {
           style={{ marginBottom: 16 }}
         />
         <div style={{ overflowX: 'auto' }}>
-          <table className="table" style={{ minWidth: 780, tableLayout: 'fixed' }}>
+          <p className="small" style={{ marginBottom: 8 }}>* Activate Q marked with asterisk means Task 1 not yet submitted — admin override.</p>
+          <table className="table" style={{ minWidth: 680, tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: 130 }} />
+              <col style={{ width: 150 }} />
+              <col style={{ width: 200 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 150 }} />
               <col style={{ width: 180 }} />
-              <col style={{ width: 90 }} />
-              <col style={{ width: 100 }} />
-              <col style={{ width: 130 }} />
-              <col style={{ width: 130 }} />
-              <col style={{ width: 160 }} />
             </colgroup>
             <thead>
               <tr>
                 <th>Reviewer</th>
                 <th>Case</th>
                 <th>Status</th>
-                <th>Case sub.</th>
+                <th>Task 1</th>
                 <th>Progress</th>
-                <th>Reviewer view</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -475,9 +483,6 @@ export default function AdminPage() {
                       ) : <span className="small">—</span>}
                     </td>
                     <td>
-                      <span className="small">{reviewerViewLabel(row, caseSubmissionDone)}</span>
-                    </td>
-                    <td>
                       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                         {!caseActive && (
                           <button
@@ -493,11 +498,11 @@ export default function AdminPage() {
                             {!questionnaireEnabled ? (
                               <button
                                 className="btn btn-primary btn-small"
-                                disabled={!caseSubmissionDone || updating === row.id}
+                                disabled={updating === row.id}
                                 onClick={() => toggleQuestionnaire(row, true)}
-                                title={!caseSubmissionDone ? 'Need case submission first' : ''}
+                                title={!caseSubmissionDone ? 'Task 1 not yet submitted by reviewer' : 'Activate expert questionnaire'}
                               >
-                                Activate Q
+                                Activate Q{!caseSubmissionDone ? ' *' : ''}
                               </button>
                             ) : (
                               <button

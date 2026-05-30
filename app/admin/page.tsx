@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-export const dynamic = 'force-static';
+export const dynamic = 'force-dynamic';
 
 function fmt(value?: string) {
   if (!value) return '-';

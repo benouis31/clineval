@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { checkpoints, likertOptions, harmOptionsForQuestion } from '../../lib/questionnaire';
-export const dynamic = 'force-static';
+
+export const dynamic = 'force-dynamic'; 
 
 type Reviewer = { id: string; code: string; display_name: string };
 type Assignment = {

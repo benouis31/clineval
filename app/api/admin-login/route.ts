@@ -6,7 +6,7 @@ export async function POST(request: NextRequest) {
   const password = formData.get('password') as string;
   if (password === ADMIN_PASSWORD) {
     const response = NextResponse.redirect(new URL('/admin', request.url));
-    response.cookies.set(COOKIE_NAME, ADMIN_PASSWORD, { httpOnly: true, secure: true, sameSite: 'strict', maxAge: 60 * 60 * 8, path: '/' });
+    response.cookies.set(COOKIE_NAME, ADMIN_PASSWORD, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', maxAge: 60 * 60 * 8, path: '/' });
     return response;
   }
   return NextResponse.redirect(new URL('/admin?error=1', request.url));

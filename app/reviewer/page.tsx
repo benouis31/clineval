@@ -19,7 +19,7 @@ type CaseSubmission = {
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 
 const TOTAL_STEPS = checkpoints.length;
-const CONTACT_EMAIL = 'study@clineval.org';
+const CONTACT_EMAIL = 'jan-niklas.eckardt@ukdd.de';
 const emptyCaseSubmission: CaseSubmission = {
   diagnosis: '', differential_diagnosis: '', recommended_tests: '',
   treatment_plan: '', confidence_score: '', notes: ''

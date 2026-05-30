@@ -238,10 +238,10 @@ export default function CaseSubmissionPage() {
       <main className="container">
         <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>✅</div>
-          <h1>Your case has been successfully submitted.</h1>
+          <h1>Your case has been successfully submitted. Thank you for your contribution!</h1>
           <p style={{ color: 'var(--muted)', marginTop: 8, fontSize: 15 }}>
-            Thank you for your contribution, <strong>{form.full_name}</strong>.<br />
-            Your case will be reviewed by the study team. You may be contacted for clarification.
+            Dear <strong>{form.full_name}</strong>, your submission has been received and will be reviewed by the study team.
+            You may be contacted for clarification or revision if needed.
           </p>
           <div className="row" style={{ justifyContent: 'center', marginTop: 24, gap: 12 }}>
             <button className="btn btn-primary" onClick={downloadSubmission}>
@@ -282,18 +282,21 @@ export default function CaseSubmissionPage() {
         <div className="progress-bar">
           <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
         </div>
-        <div className="progress-meta" style={{ marginTop: 8 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
           {[
-            'Contributor', 'Case Metadata',
-            'CP1: Presentation', 'CP2: Diagnostics',
-            'CP3: Treatment', 'CP4: Complication'
+            '1 · Info', '2 · Case', '3 · CP1', '4 · CP2', '5 · CP3', '6 · CP4'
           ].map((label, i) => (
             <span key={i} style={{
+              padding: '4px 10px',
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 600,
               background: step === i + 1 ? 'var(--accent)' : step > i + 1 ? 'var(--accent-light)' : '#f1eee8',
               color: step === i + 1 ? 'white' : step > i + 1 ? 'var(--accent)' : 'var(--muted)',
-              fontWeight: step === i + 1 ? 600 : 400,
+              border: '1px solid',
+              borderColor: step === i + 1 ? 'var(--accent)' : step > i + 1 ? '#a8d5bc' : 'var(--line)',
             }}>
-              {label}
+              {step > i + 1 ? '✓ ' : ''}{label}
             </span>
           ))}
         </div>
@@ -466,7 +469,7 @@ export default function CaseSubmissionPage() {
           </Field>
           <Field
             label="Other treatment-relevant findings (optional)"
-            hint="Include if applicable and not already provided: organ function (renal, hepatic, cardiac), contraindications, prior therapies, frailty / ECOG updates, biomarkers / mutations."
+            hint="Include if applicable and not already provided: organ function (renal, hepatic, cardiac), contraindications, prior therapies, frailty / ECOG updates, biomarkers / mutations. Note: if all relevant information for treatment decision-making has already been provided in Checkpoints 1 and 2, this field does not need to be repeated here."
           >
             <textarea
               className="input"

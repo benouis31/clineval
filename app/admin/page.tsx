@@ -65,6 +65,7 @@ export default function AdminPage() {
   const [messages, setMessages] = useState<any[]>([]);
   const [caseSubmissions, setCaseSubmissions] = useState<any[]>([]);
   const [updating, setUpdating] = useState<string | null>(null);
+  const [emailStatus, setEmailStatus] = useState<Record<string, 'sent' | 'no-email'>>({});
   // FIX: removed auditLog state — fetched but never rendered, dead dead weight
 
   // FIX: sessionStorage access on mount is safe because this is a 'use client' component,
@@ -256,16 +257,33 @@ export default function AdminPage() {
 
   function reminderEmail(row: any) {
     const email = row.reviewers?.email;
-    if (!email) return alert('No email address for this reviewer');
-    // FIX: window.location.href = mailto: navigates away in some browsers;
-    // use a hidden anchor click instead which opens the mail client without leaving the page
+    if (!email) {
+      setEmailStatus(s => ({ ...s, [row.id]: 'no-email' }));
+      return;
+    }
+    const subject = encodeURIComponent('ClinEval reminder');
+    const body = encodeURIComponent(
+      `Dear ${row.reviewers?.display_name || row.reviewers?.code},\n\n` +
+      `This is a reminder to complete your evaluation for case ${row.cases?.case_code}.\n\n` +
+      `Please log in to ClinEval to continue.\n\nThank you.`
+    );
     const a = document.createElement('a');
-    a.href = `mailto:${email}?subject=ClinEval%20reminder&body=Please%20continue%20your%20review%20for%20case%20${row.cases?.case_code}`;
+    a.href = `mailto:${email}?subject=${subject}&body=${body}`;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    // Mark as sent so the UI confirms the action
+    setEmailStatus(s => ({ ...s, [row.id]: 'sent' }));
+    // Log the reminder in the audit log
+    supabase.from('reviewer_audit_log').insert({
+      assignment_id: row.id,
+      reviewer_id: row.reviewer_id,
+      case_id: row.case_id,
+      event_type: 'reminder_email_sent',
+      created_at: new Date().toISOString()
+    });
   }
 
   return (
@@ -375,7 +393,16 @@ export default function AdminPage() {
           style={{ marginBottom: 16 }}
         />
         <div style={{ overflowX: 'auto' }}>
-          <table className="table">
+          <table className="table" style={{ minWidth: 780, tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: 130 }} />
+              <col style={{ width: 180 }} />
+              <col style={{ width: 90 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 130 }} />
+              <col style={{ width: 160 }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>Reviewer</th>
@@ -412,7 +439,7 @@ export default function AdminPage() {
                     </td>
                     <td>
                       <strong>{row.cases?.case_code}</strong><br />
-                      <span className="small">{row.cases?.title?.slice(0, 50)}</span><br />
+                      <span className="small" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.cases?.title}</span>
                       {caseActive
                         ? <span className="status-pill status-submitted">Active</span>
                         : <span className="status-pill status-assigned">Inactive</span>}
@@ -488,12 +515,19 @@ export default function AdminPage() {
                             >
                               Reset
                             </button>
-                            <button
-                              className="btn btn-secondary btn-small"
-                              onClick={() => reminderEmail(row)}
-                            >
-                              Email
-                            </button>
+                            {emailStatus[row.id] === 'no-email' ? (
+                              <span className="small" style={{ color: 'var(--danger)' }}>No email</span>
+                            ) : emailStatus[row.id] === 'sent' ? (
+                              <span className="small" style={{ color: 'var(--accent)' }}>Sent</span>
+                            ) : (
+                              <button
+                                className="btn btn-secondary btn-small"
+                                onClick={() => reminderEmail(row)}
+                                title={row.reviewers?.email || 'No email on file'}
+                              >
+                                Email
+                              </button>
+                            )}
                           </>
                         )}
                         {isSubmitted && <span className="small">Complete</span>}

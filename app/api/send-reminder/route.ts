@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 const STUDY_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://clineval.org';
 const CONTACT_EMAIL = 'jan-niklas.eckardt@ukdd.de';
-const FROM_EMAIL = 'ClinEval <noreply@clineval.org>';
+const FROM_EMAIL = 'ClinEval <onboarding@resend.dev>';
 
 export async function POST(request: Request) {
   const apiKey = process.env.RESEND_API_KEY;

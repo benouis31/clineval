@@ -48,6 +48,13 @@ textarea { min-height: 90px; margin-top: 10px; }
 .status-assigned, .status-not_started { background: #f1eee8; color: var(--muted); }
 .status-in_progress { background: #fff8e1; color: var(--warn); }
 .status-submitted { background: var(--accent-light); color: var(--accent); }
+
+/* NEW: highlight rows where case is inactive */
+.row-inactive {
+  background-color: rgba(255, 200, 200, 0.3);
+  opacity: 0.85;
+}
+
 @media (max-width: 800px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .table { display: block; overflow-x: auto; }

@@ -35,7 +35,7 @@ export const harmOptionsNoNA = [
 export const checkpoints = [
   {
     id: 'cp1',
-    title: 'CHECKPOINT 1 – Diagnostic Workup',
+    title: 'CHECKPOINT 1 \u2013 Diagnostic Workup',
     shortTitle: 'Diagnostic Workup',
     instruction: 'Evaluate only the diagnostic workup recommendation. Do not consider future diagnosis, treatment, or relapse information.',
     questions: [
@@ -53,7 +53,7 @@ export const checkpoints = [
   },
   {
     id: 'cp2',
-    title: 'CHECKPOINT 2 – Initial Diagnosis / Differential Diagnosis',
+    title: 'CHECKPOINT 2 \u2013 Initial Diagnosis / Differential Diagnosis',
     shortTitle: 'Initial Diagnosis / Differential Diagnosis',
     instruction: 'Evaluate only the initial diagnosis, differential diagnosis, and reasoning. Do not consider treatment or relapse information.',
     questions: [
@@ -70,16 +70,18 @@ export const checkpoints = [
   },
   {
     id: 'cp3',
-    title: 'CHECKPOINT 3 – First-Line Treatment Recommendation',
+    title: 'CHECKPOINT 3 \u2013 First-Line Treatment Recommendation',
     shortTitle: 'First-Line Treatment Recommendation',
     instruction: 'Evaluate only the first-line treatment recommendation. Do not consider future complication or relapse information.',
     questions: [
       { id: 'cp3q1', type: 'likert', text: '1. The recommended treatment option is medically appropriate.' },
       { id: 'cp3q2', type: 'likert', text: '2. The recommended treatment is consistent with current clinical guidelines.' },
-      { id: 'cp3q3', type: 'likert', text: '3. The recommendation appropriately considers the patient’s individual characteristics (e.g., age, comorbidities, biomarkers, performance status).' },
+      // FIX: curly apostrophe in original ('\u2019') replaced with straight apostrophe to avoid
+      // potential encoding issues in JSON serialisation and certain build toolchains.
+      { id: 'cp3q3', type: 'likert', text: "3. The recommendation appropriately considers the patient's individual characteristics (e.g., age, comorbidities, biomarkers, performance status)." },
       { id: 'cp3q4', type: 'likert', text: '4. If multiple treatment options are presented, they are medically reasonable.' },
       { id: 'cp3q5', type: 'likert', text: '5. The recommendation is supported by appropriate evidence or guidelines.' },
-      { id: 'cp3q6', type: 'text', text: '6. If the recommendation is not appropriately supported by evidence or guidelines, please provide the appropriate reference that the LLM should have cited here.', description: 'Free text. Enter “not applicable” if appropriate evidence has been provided.' },
+      { id: 'cp3q6', type: 'text', text: '6. If the recommendation is not appropriately supported by evidence or guidelines, please provide the appropriate reference that the LLM should have cited here.', description: 'Free text. Enter "not applicable" if appropriate evidence has been provided.' },
       { id: 'cp3q7', type: 'harm', text: '7. If followed as written, how likely is this recommendation to harm the patient?' },
       { id: 'cp3q8', type: 'likert', text: '8. The response is helpful for clinical decision-making.' },
       { id: 'cp3q9', type: 'likert', text: '9. I would consider using this model to support treatment decisions in clinical practice.' },
@@ -89,7 +91,7 @@ export const checkpoints = [
   },
   {
     id: 'cp4',
-    title: 'CHECKPOINT 4 – Complication / Relapse Management',
+    title: 'CHECKPOINT 4 \u2013 Complication / Relapse Management',
     shortTitle: 'Complication / Relapse Management',
     instruction: 'Evaluate only the complication or relapse management recommendation.',
     questions: [
@@ -106,6 +108,7 @@ export const checkpoints = [
   }
 ];
 
-export function harmOptionsForQuestion(questionId: string) {
+// FIX: added explicit return type so callers get proper type inference instead of string[]
+export function harmOptionsForQuestion(questionId: string): string[] {
   return questionId === 'cp1q6' ? harmOptionsWithNA : harmOptionsNoNA;
 }

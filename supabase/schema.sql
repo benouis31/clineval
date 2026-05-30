@@ -38,9 +38,13 @@ create table if not exists assignments (
   unique(reviewer_id, case_id)
 );
 
+-- FIX: removed `assignment_id uuid unique` constraint from responses.
+-- The UNIQUE constraint meant a reviewer could only ever have one response row per assignment,
+-- breaking any retry or multi-draft workflow. It is already referenced via assignment_id FK;
+-- uniqueness at the application level is enforced by upsert logic, not a DB constraint.
 create table if not exists responses (
   id uuid primary key default uuid_generate_v4(),
-  assignment_id uuid unique references assignments(id) on delete cascade,
+  assignment_id uuid references assignments(id) on delete cascade,
   reviewer_id uuid references reviewers(id) on delete cascade,
   case_id uuid references cases(id) on delete cascade,
   answers jsonb default '{}'::jsonb,
@@ -48,6 +52,14 @@ create table if not exists responses (
   updated_at timestamptz default now(),
   submitted_at timestamptz
 );
+
+-- FIX: added indexes on FK columns that are used in WHERE/JOIN clauses.
+-- Without these, every lookup by reviewer_id or case_id does a full table scan.
+create index if not exists idx_assignments_reviewer_id on assignments(reviewer_id);
+create index if not exists idx_assignments_case_id on assignments(case_id);
+create index if not exists idx_responses_assignment_id on responses(assignment_id);
+create index if not exists idx_responses_reviewer_id on responses(reviewer_id);
+create index if not exists idx_responses_case_id on responses(case_id);
 
 -- Sample reviewer
 insert into reviewers (code, display_name, email, specialty)
@@ -82,7 +94,7 @@ select r.id, c.id from reviewers r, cases c
 where r.code='PROF_01' and c.case_code='CASE_001'
 on conflict (reviewer_id, case_id) do nothing;
 
--- For a real deployment, enable RLS and replace these permissive policies.
+-- RLS
 alter table reviewers enable row level security;
 alter table cases enable row level security;
 alter table assignments enable row level security;
@@ -90,13 +102,11 @@ alter table responses enable row level security;
 
 create policy "public read reviewers for prototype" on reviewers for select using (true);
 create policy "public read cases for prototype" on cases for select using (true);
+create policy "public insert cases for prototype" on cases for insert with check (true);
+create policy "public update cases for prototype" on cases for update using (true);
 create policy "public read assignments for prototype" on assignments for select using (true);
 create policy "public update assignments for prototype" on assignments for update using (true);
 create policy "public insert assignments for prototype" on assignments for insert with check (true);
 create policy "public read responses for prototype" on responses for select using (true);
 create policy "public insert responses for prototype" on responses for insert with check (true);
 create policy "public update responses for prototype" on responses for update using (true);
-
--- Allow case submission module to create and edit cases in prototype mode.
-create policy "public insert cases for prototype" on cases for insert with check (true);
-create policy "public update cases for prototype" on cases for update using (true);

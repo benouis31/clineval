@@ -65,7 +65,7 @@ export default function AdminPage() {
   const [messages, setMessages] = useState<any[]>([]);
   const [caseSubmissions, setCaseSubmissions] = useState<any[]>([]);
   const [updating, setUpdating] = useState<string | null>(null);
-  const [emailStatus, setEmailStatus] = useState<Record<string, 'sent' | 'no-email'>>({});
+  const [emailStatus, setEmailStatus] = useState<Record<string, 'sending' | 'sent' | 'no-email' | 'error'>>({});
   // FIX: removed auditLog state — fetched but never rendered, dead dead weight
 
   // FIX: sessionStorage access on mount is safe because this is a 'use client' component,
@@ -243,35 +243,38 @@ export default function AdminPage() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  function reminderEmail(row: any) {
+  async function reminderEmail(row: any) {
     const email = row.reviewers?.email;
     if (!email) {
       setEmailStatus(s => ({ ...s, [row.id]: 'no-email' }));
       return;
     }
-    const subject = encodeURIComponent('ClinEval reminder');
-    const body = encodeURIComponent(
-      `Dear ${row.reviewers?.display_name || row.reviewers?.code},\n\n` +
-      `This is a reminder to complete your evaluation for case ${row.cases?.case_code}.\n\n` +
-      `Please log in to ClinEval to continue.\n\nThank you.`
-    );
-    const a = document.createElement('a');
-    a.href = `mailto:${email}?subject=${subject}&body=${body}`;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    // Mark as sent so the UI confirms the action
-    setEmailStatus(s => ({ ...s, [row.id]: 'sent' }));
-    // Log the reminder in the audit log
-    supabase.from('reviewer_audit_log').insert({
-      assignment_id: row.id,
-      reviewer_id: row.reviewer_id,
-      case_id: row.case_id,
-      event_type: 'reminder_email_sent',
-      created_at: new Date().toISOString()
-    });
+    setEmailStatus(s => ({ ...s, [row.id]: 'sending' as any }));
+    try {
+      const res = await fetch('/api/send-reminder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reviewerName: row.reviewers?.display_name || row.reviewers?.code,
+          reviewerCode: row.reviewers?.code,
+          reviewerEmail: email,
+          caseCode: row.cases?.case_code,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed to send');
+      setEmailStatus(s => ({ ...s, [row.id]: 'sent' }));
+      supabase.from('reviewer_audit_log').insert({
+        assignment_id: row.id,
+        reviewer_id: row.reviewer_id,
+        case_id: row.case_id,
+        event_type: 'reminder_email_sent',
+        created_at: new Date().toISOString()
+      });
+    } catch (err: any) {
+      setEmailStatus(s => ({ ...s, [row.id]: 'error' as any }));
+      alert('Failed to send email: ' + err.message);
+    }
   }
 
   // Stats for summary bar
@@ -521,14 +524,21 @@ export default function AdminPage() {
                               Reset
                             </button>
                             {emailStatus[row.id] === 'no-email' ? (
-                              <span className="small" style={{ color: 'var(--danger)' }}>No email</span>
+                              <span className="small" style={{ color: 'var(--danger)' }}>No email on file</span>
+                            ) : emailStatus[row.id] === 'sending' ? (
+                              <span className="small" style={{ color: 'var(--muted)' }}>Sending…</span>
                             ) : emailStatus[row.id] === 'sent' ? (
-                              <span className="small" style={{ color: 'var(--accent)' }}>Sent</span>
+                              <span className="small" style={{ color: 'var(--accent)' }}>✓ Sent</span>
+                            ) : emailStatus[row.id] === 'error' ? (
+                              <button className="btn btn-secondary btn-small" style={{ color: 'var(--danger)' }} onClick={() => reminderEmail(row)}>
+                                Retry
+                              </button>
                             ) : (
                               <button
                                 className="btn btn-secondary btn-small"
                                 onClick={() => reminderEmail(row)}
                                 title={row.reviewers?.email || 'No email on file'}
+                                disabled={!row.reviewers?.email}
                               >
                                 Email
                               </button>

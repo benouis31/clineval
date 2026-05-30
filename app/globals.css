@@ -39,6 +39,8 @@ textarea { min-height: 90px; margin-top: 10px; }
 .progress-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .25s ease; }
 .table { width:100%; border-collapse: collapse; background:white; }
 .table th, .table td { border-bottom:1px solid var(--line); padding:10px; text-align:left; font-size:14px; vertical-align: top; }
+
+/* FIX: was repeat(5, ...) with only a 800px breakpoint — added 1024px breakpoint for tablets */
 .stats-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .stat-card { background: white; border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
 .stat-number { font-size: 28px; font-weight: 800; }
@@ -49,12 +51,16 @@ textarea { min-height: 90px; margin-top: 10px; }
 .status-in_progress { background: #fff8e1; color: var(--warn); }
 .status-submitted { background: var(--accent-light); color: var(--accent); }
 
-/* NEW: highlight rows where case is inactive */
+/* FIX: was hardcoded rgba(255,200,200,0.3) — now uses --danger variable for consistency */
 .row-inactive {
-  background-color: rgba(255, 200, 200, 0.3);
+  background-color: color-mix(in srgb, var(--danger) 12%, transparent);
   opacity: 0.85;
 }
 
+@media (max-width: 1024px) {
+  /* FIX: added tablet breakpoint — 5 columns crushed badly between 800–1024px */
+  .stats-grid { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 800px) {
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .table { display: block; overflow-x: auto; }
@@ -64,3 +70,10 @@ textarea { min-height: 90px; margin-top: 10px; }
 .check { display: block; margin: 10px 0; line-height: 1.5; }
 .check input { margin-right: 8px; }
 .notice { background: #f1eee8; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+/* FIX: form-grid and table-wrapper were used in admin page but never defined */
+.form-grid { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.form-grid input, .form-grid select { flex: 1 1 140px; }
+.table-wrapper { overflow-x: auto; }
+
+/* Offline indicator banner */
+.offline-banner { background: var(--danger); color: white; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; }

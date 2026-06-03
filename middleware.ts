@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (!pathname.startsWith('/admin')) return NextResponse.next();
@@ -16,4 +17,7 @@ export function middleware(request: NextRequest) {
     headers: { 'WWW-Authenticate': 'Basic realm="ClinEval Admin"' },
   });
 }
-export const config = { matcher: '/admin/:path*' };
+
+export const config = {
+  matcher: ['/admin', '/admin/:path*'],
+};

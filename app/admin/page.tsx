@@ -193,7 +193,17 @@ export default function AdminPage() {
     }
   }
 
-  function exportCsv() {
+  function downloadBlob(filename: string, content: string, type = 'text/csv') {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Export 1: Progress overview (CSV)
+  function exportProgressCsv() {
     const headers = ['reviewer_code', 'reviewer_name', 'case_code', 'case_title', 'case_contributor', 'task1_status', 'model_name', 'eval_status', 'answers_count'];
     const rows: any[] = [];
     assignments.forEach(a => {
@@ -206,17 +216,60 @@ export default function AdminPage() {
       } else {
         outputs.forEach(o => {
           const ev = llmEvaluations.find(e => e.assignment_id === a.id && e.llm_output_id === o.id);
-          rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, contributor?.code || '-', cs?.status || 'not_started', o.model_name, ev?.status || 'not_started', ev?.answers ? Object.keys(ev.answers).length : 0]);
+          rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, contributor?.code || '-', cs?.status || 'not_started', o.model_name, ev?.status || 'not_started', ev?.answers ? Object.keys(ev.answers).filter(k => !k.startsWith('private_notes')).length : 0]);
         });
       }
     });
     const csv = [headers, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'clineval_progress.csv';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadBlob('clineval_progress.csv', csv);
+  }
+
+  // Export 2: Task 1 — independent assessments (CSV)
+  function exportTask1Csv() {
+    const headers = ['reviewer_code', 'reviewer_name', 'case_code', 'case_title', 'status', 'submitted_at', 'diagnosis', 'differential_diagnosis', 'recommended_tests', 'treatment_plan', 'confidence_score', 'notes'];
+    const rows = caseSubmissions.map(cs => {
+      const assignment = assignments.find(a => a.id === cs.assignment_id);
+      return [
+        assignment?.reviewers?.code || '',
+        assignment?.reviewers?.display_name || '',
+        assignment?.cases?.case_code || '',
+        assignment?.cases?.title || '',
+        cs.status || '',
+        cs.submitted_at || '',
+        cs.diagnosis || '',
+        cs.differential_diagnosis || '',
+        cs.recommended_tests || '',
+        cs.treatment_plan || '',
+        cs.confidence_score || '',
+        cs.notes || '',
+      ];
+    });
+    const csv = [headers, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
+    downloadBlob('clineval_task1_independent_assessments.csv', csv);
+  }
+
+  // Export 3: Task 2 — questionnaire answers (JSON, one object per evaluation)
+  function exportTask2Json() {
+    const data = llmEvaluations.map(ev => {
+      const assignment = assignments.find(a => a.id === ev.assignment_id);
+      const llmOutput = llmOutputs.find(o => o.id === ev.llm_output_id);
+      // Filter out private notes from exported answers
+      const publicAnswers = Object.fromEntries(
+        Object.entries(ev.answers || {}).filter(([k]) => !k.startsWith('private_notes'))
+      );
+      return {
+        reviewer_code: assignment?.reviewers?.code || '',
+        reviewer_name: assignment?.reviewers?.display_name || '',
+        case_code: assignment?.cases?.case_code || '',
+        case_title: assignment?.cases?.title || '',
+        model_name: llmOutput?.model_name || '',
+        model_version: llmOutput?.model_version || '',
+        status: ev.status,
+        submitted_at: ev.submitted_at || '',
+        answers: publicAnswers,
+      };
+    });
+    downloadBlob('clineval_task2_questionnaire_answers.json', JSON.stringify(data, null, 2), 'application/json');
   }
 
   const tabs = [
@@ -232,7 +285,9 @@ export default function AdminPage() {
           <h1 style={{ margin: 0, fontSize: 22 }}>ClinEval Admin</h1>
           <div className="row">
             <button className="btn btn-secondary btn-small" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
-            <button className="btn btn-primary btn-small" onClick={exportCsv}>Export CSV</button>
+            <button className="btn btn-secondary btn-small" onClick={exportProgressCsv} title="Export study progress overview">Progress CSV</button>
+            <button className="btn btn-secondary btn-small" onClick={exportTask1Csv} title="Export independent assessments (Task 1)">Task 1 CSV</button>
+            <button className="btn btn-primary btn-small" onClick={exportTask2Json} title="Export questionnaire answers (Task 2)">Task 2 JSON</button>
           </div>
         </div>
         {loadError && <div className="alert alert-warn" style={{ marginTop: 10 }}>{loadError}</div>}

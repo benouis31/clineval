@@ -25,8 +25,6 @@ export default function AdminPage() {
   const [updating, setUpdating] = useState<string | null>(null);
   const [emailStatus, setEmailStatus] = useState<Record<string, 'sending' | 'sent' | 'no-email' | 'error'>>({});
   const [activeTab, setActiveTab] = useState<'overview' | 'cases' | 'manage'>('overview');
-
-  // Forms
   const [newReviewer, setNewReviewer] = useState({ code: '', display_name: '', email: '', specialty: 'Hematology' });
   const [editReviewer, setEditReviewer] = useState<any | null>(null);
   const [assignReviewerId, setAssignReviewerId] = useState('');
@@ -76,14 +74,12 @@ export default function AdminPage() {
     if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('adminSearch', search);
   }, [search]);
 
-  // ── Stats ──
   const totalCaseSubmissions = caseSubmissions.filter(cs => cs.status === 'submitted').length;
   const totalEvalSubmitted = llmEvaluations.filter(e => e.status === 'submitted').length;
   const totalEvals = llmEvaluations.length;
   const totalAssignments = assignments.length;
   const totalCorrections = messages.length;
 
-  // ── Filtered assignments ──
   const filteredAssignments = useMemo(() => {
     const q = search.toLowerCase();
     if (!q) return assignments;
@@ -95,7 +91,6 @@ export default function AdminPage() {
     );
   }, [assignments, search]);
 
-  // ── Actions ──
   async function addReviewer() {
     if (!newReviewer.code || !newReviewer.display_name) return alert('Code and name required');
     const { error } = await supabase.from('reviewers').insert(newReviewer);
@@ -106,6 +101,21 @@ export default function AdminPage() {
 
   async function assignCase() {
     if (!assignReviewerId || !assignCaseId) return alert('Select both reviewer and case');
+
+    // ── Cross-validation check ──────────────────────────────────
+    // Block assignment if the reviewer is the contributor of this case.
+    // Experts must not evaluate their own cases.
+    const selectedCase = cases.find(c => c.id === assignCaseId);
+    if (selectedCase?.contributor_reviewer_id && selectedCase.contributor_reviewer_id === assignReviewerId) {
+      const rev = reviewers.find(r => r.id === assignReviewerId);
+      return alert(
+        `Cross-validation violation!\n\n` +
+        `${rev?.display_name || rev?.code} submitted case ${selectedCase.case_code}. ` +
+        `Experts cannot evaluate their own cases.\n\n` +
+        `Please assign a different reviewer to this case.`
+      );
+    }
+
     const { error } = await supabase.from('assignments').upsert({
       reviewer_id: assignReviewerId, case_id: assignCaseId,
       status: 'not_started', questionnaire_enabled: false,
@@ -147,9 +157,12 @@ export default function AdminPage() {
   async function addLLMOutput() {
     if (!newLLM.case_id || !newLLM.model_name) return alert('Case and model name required');
     const { error } = await supabase.from('llm_outputs').insert({
-      case_id: newLLM.case_id, model_name: newLLM.model_name, model_version: newLLM.model_version || null,
-      model_output_cp1: newLLM.model_output_cp1, model_output_cp2: newLLM.model_output_cp2,
-      model_output_cp3: newLLM.model_output_cp3, model_output_cp4: newLLM.model_output_cp4,
+      case_id: newLLM.case_id, model_name: newLLM.model_name,
+      model_version: newLLM.model_version || null,
+      model_output_cp1: newLLM.model_output_cp1,
+      model_output_cp2: newLLM.model_output_cp2,
+      model_output_cp3: newLLM.model_output_cp3,
+      model_output_cp4: newLLM.model_output_cp4,
     });
     if (error) return alert(error.message);
     setNewLLM({ case_id: '', model_name: '', model_version: '', model_output_cp1: '', model_output_cp2: '', model_output_cp3: '', model_output_cp4: '' });
@@ -181,17 +194,19 @@ export default function AdminPage() {
   }
 
   function exportCsv() {
-    const headers = ['reviewer_code', 'reviewer_name', 'case_code', 'case_title', 'task1_status', 'model_name', 'eval_status', 'answers_count'];
+    const headers = ['reviewer_code', 'reviewer_name', 'case_code', 'case_title', 'case_contributor', 'task1_status', 'model_name', 'eval_status', 'answers_count'];
     const rows: any[] = [];
     assignments.forEach(a => {
       const cs = caseSubmissions.find(s => s.assignment_id === a.id);
       const outputs = llmOutputs.filter(o => o.case_id === a.case_id);
+      const caseRow = cases.find(c => c.id === a.case_id);
+      const contributor = reviewers.find(r => r.id === caseRow?.contributor_reviewer_id);
       if (outputs.length === 0) {
-        rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, cs?.status || 'not_started', '-', '-', 0]);
+        rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, contributor?.code || '-', cs?.status || 'not_started', '-', '-', 0]);
       } else {
         outputs.forEach(o => {
           const ev = llmEvaluations.find(e => e.assignment_id === a.id && e.llm_output_id === o.id);
-          rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, cs?.status || 'not_started', o.model_name, ev?.status || 'not_started', ev?.answers ? Object.keys(ev.answers).length : 0]);
+          rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, contributor?.code || '-', cs?.status || 'not_started', o.model_name, ev?.status || 'not_started', ev?.answers ? Object.keys(ev.answers).length : 0]);
         });
       }
     });
@@ -212,7 +227,6 @@ export default function AdminPage() {
 
   return (
     <main className="container-wide">
-      {/* Header */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
           <h1 style={{ margin: 0, fontSize: 22 }}>ClinEval Admin</h1>
@@ -222,8 +236,6 @@ export default function AdminPage() {
           </div>
         </div>
         {loadError && <div className="alert alert-warn" style={{ marginTop: 10 }}>{loadError}</div>}
-
-        {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10, marginTop: 16 }}>
           {[
             { label: 'Reviewers', value: reviewers.length, color: 'var(--text)' },
@@ -239,15 +251,12 @@ export default function AdminPage() {
             </div>
           ))}
         </div>
-
-        {/* Tabs */}
         <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--line)', marginTop: 20 }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id as any)}
               style={{ padding: '10px 20px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
                 color: activeTab === t.id ? 'var(--accent)' : 'var(--muted)',
-                borderBottom: activeTab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
-                marginBottom: -1 }}>
+                borderBottom: activeTab === t.id ? '2px solid var(--accent)' : '2px solid transparent', marginBottom: -1 }}>
               {t.label}
             </button>
           ))}
@@ -260,12 +269,12 @@ export default function AdminPage() {
           <div className="card">
             <h2 style={{ marginTop: 0 }}>Assignments & Progress</h2>
             <input className="input" placeholder="Search reviewer or case..." value={search} onChange={e => setSearch(e.target.value)} style={{ marginBottom: 16 }} />
-            <p className="small" style={{ marginBottom: 8 }}>* Activate Q without Task 1 submission = admin override.</p>
+            <p className="small" style={{ marginBottom: 8 }}>* Activate Q without Task 1 submission = admin override. 🚫 = cross-validation violation (reviewer is case author).</p>
             <div style={{ overflowX: 'auto' }}>
-              <table className="table" style={{ minWidth: 800, tableLayout: 'fixed' }}>
+              <table className="table" style={{ minWidth: 860, tableLayout: 'fixed' }}>
                 <colgroup>
-                  <col style={{ width: 140 }} /><col style={{ width: 160 }} /><col style={{ width: 90 }} />
-                  <col style={{ width: 90 }} /><col style={{ width: 200 }} /><col style={{ width: 180 }} />
+                  <col style={{ width: 130 }} /><col style={{ width: 160 }} /><col style={{ width: 80 }} />
+                  <col style={{ width: 80 }} /><col style={{ width: 210 }} /><col style={{ width: 200 }} />
                 </colgroup>
                 <thead>
                   <tr><th>Reviewer</th><th>Case</th><th>Task 1</th><th>Q active</th><th>LLM Evaluations</th><th>Actions</th></tr>
@@ -279,6 +288,9 @@ export default function AdminPage() {
                     const evals = llmEvaluations.filter(e => e.assignment_id === assignment.id);
                     const submitted = evals.filter(e => e.status === 'submitted').length;
                     const emailSt = emailStatus[assignment.id];
+                    // Check cross-validation: is this reviewer the case author?
+                    const caseRow = cases.find(c => c.id === assignment.case_id);
+                    const isCrossViolation = caseRow?.contributor_reviewer_id && caseRow.contributor_reviewer_id === assignment.reviewer_id;
 
                     return (
                       <tr key={assignment.id} className={!caseActive ? 'row-inactive' : ''}>
@@ -287,14 +299,16 @@ export default function AdminPage() {
                           <span className="small">{assignment.reviewers?.code}</span>
                         </td>
                         <td>
-                          <strong>{assignment.cases?.case_code}</strong><br />
+                          <strong>{assignment.cases?.case_code}</strong>
+                          {isCrossViolation && <span title="This reviewer submitted this case — cross-validation violation" style={{ marginLeft: 4 }}>🚫</span>}
+                          <br />
                           <span className="small" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{assignment.cases?.title}</span>
                           <span className={`status-pill ${caseActive ? 'status-submitted' : 'status-assigned'}`}>{caseActive ? 'Active' : 'Inactive'}</span>
                         </td>
                         <td>
                           {task1Done
                             ? <span className="status-pill status-submitted">Done</span>
-                            : <span className="status-pill status-assigned">{cs ? 'Draft' : 'Not started'}</span>}
+                            : <span className="status-pill status-assigned">{cs ? 'Draft' : 'None'}</span>}
                         </td>
                         <td>
                           {assignment.questionnaire_enabled
@@ -354,8 +368,6 @@ export default function AdminPage() {
               </table>
             </div>
           </div>
-
-          {/* Corrections */}
           <div className="card">
             <h2 style={{ marginTop: 0 }}>Correction Requests</h2>
             {messages.length === 0 ? <p className="small">None</p> : (
@@ -380,14 +392,23 @@ export default function AdminPage() {
         <>
           {cases.map(caseRow => {
             const outputs = llmOutputs.filter(o => o.case_id === caseRow.id);
+            const contributor = reviewers.find(r => r.id === caseRow.contributor_reviewer_id);
             return (
               <div key={caseRow.id} className="card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
                   <div>
                     <h2 style={{ margin: 0, fontSize: 18 }}>{caseRow.case_code}</h2>
                     <div style={{ color: 'var(--muted)', fontSize: 14, marginTop: 2 }}>{caseRow.title}</div>
-                    <div style={{ marginTop: 6 }}>
+                    <div style={{ marginTop: 6, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                       <span className="small">{caseRow.disease_category} · {caseRow.difficulty_level}</span>
+                      {contributor && (
+                        <span className="small" style={{ background: '#fff8e1', color: 'var(--warn)', padding: '2px 8px', borderRadius: 999, border: '1px solid #f0d080' }}>
+                          ✍️ Submitted by {contributor.code} — cannot be assigned to them
+                        </span>
+                      )}
+                      {caseRow.contributor_name && !contributor && (
+                        <span className="small" style={{ color: 'var(--muted)' }}>Submitted by {caseRow.contributor_name}</span>
+                      )}
                     </div>
                   </div>
                   <div className="row">
@@ -397,8 +418,6 @@ export default function AdminPage() {
                       : <button className="btn btn-primary btn-small" onClick={() => toggleCaseActive(caseRow, true)}>Activate</button>}
                   </div>
                 </div>
-
-                {/* LLM outputs for this case */}
                 <div style={{ marginTop: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <strong style={{ fontSize: 14 }}>LLM Outputs ({outputs.length})</strong>
@@ -426,8 +445,6 @@ export default function AdminPage() {
                       })}
                     </div>
                   )}
-
-                  {/* Add LLM form */}
                   {showLLMForm === caseRow.id && (
                     <div style={{ marginTop: 12, background: 'var(--accent-light)', border: '1px solid #a8d5bc', borderRadius: 12, padding: 16 }}>
                       <h3 style={{ marginTop: 0, fontSize: 15 }}>Add LLM Output for {caseRow.case_code}</h3>
@@ -468,7 +485,6 @@ export default function AdminPage() {
       {/* ── TAB: Manage ── */}
       {activeTab === 'manage' && (
         <>
-          {/* Reviewers */}
           <div className="card">
             <h2 style={{ marginTop: 0 }}>Reviewers</h2>
             <div className="row" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -496,9 +512,11 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* Assign case */}
           <div className="card">
             <h2 style={{ marginTop: 0 }}>Assign Case to Reviewer</h2>
+            <div className="alert alert-info" style={{ marginBottom: 12 }}>
+              Cross-validation is enforced — experts cannot be assigned to cases they submitted. The system will block such assignments automatically.
+            </div>
             <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
               <select className="input" style={{ flex: '1 1 180px' }} value={assignReviewerId} onChange={e => setAssignReviewerId(e.target.value)}>
                 <option value="">Select reviewer</option>
@@ -506,13 +524,19 @@ export default function AdminPage() {
               </select>
               <select className="input" style={{ flex: '1 1 180px' }} value={assignCaseId} onChange={e => setAssignCaseId(e.target.value)}>
                 <option value="">Select case</option>
-                {cases.map(c => <option key={c.id} value={c.id}>{c.case_code} – {c.title}</option>)}
+                {cases.map(c => {
+                  const contributor = reviewers.find(r => r.id === c.contributor_reviewer_id);
+                  return (
+                    <option key={c.id} value={c.id}>
+                      {c.case_code} – {c.title?.slice(0, 40)}{contributor ? ` (by ${contributor.code})` : ''}
+                    </option>
+                  );
+                })}
               </select>
               <button className="btn btn-primary" onClick={assignCase}>Assign</button>
             </div>
           </div>
 
-          {/* Edit reviewer */}
           {editReviewer && (
             <div className="card">
               <h2 style={{ marginTop: 0 }}>Edit — {editReviewer.code}</h2>

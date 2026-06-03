@@ -31,6 +31,11 @@ export default function AdminPage() {
   const [assignCaseId, setAssignCaseId] = useState('');
   const [newLLM, setNewLLM] = useState({ case_id: '', model_name: '', model_version: '', model_output_cp1: '', model_output_cp2: '', model_output_cp3: '', model_output_cp4: '' });
   const [showLLMForm, setShowLLMForm] = useState<string | null>(null);
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportResult, setBulkImportResult] = useState<string | null>(null);
+  const [autoAssigning, setAutoAssigning] = useState(false);
+  const [autoAssignResult, setAutoAssignResult] = useState<string | null>(null);
+  const [showTimestampWarnings, setShowTimestampWarnings] = useState(false);
 
   async function load() {
     setLoading(true); setLoadError('');
@@ -191,6 +196,94 @@ export default function AdminPage() {
     } catch (err: any) {
       setEmailStatus(s => ({ ...s, [assignment.id]: 'error' }));
     }
+  }
+
+  // ── Bulk LLM Output Import ──────────────────────────────────
+  // Expects JSON: Array of { case_code, model_name, model_version?,
+  //   model_output_cp1, model_output_cp2, model_output_cp3, model_output_cp4 }
+  async function handleBulkLLMImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBulkImporting(true);
+    setBulkImportResult(null);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!Array.isArray(data)) throw new Error('File must be a JSON array');
+      let inserted = 0, skipped = 0, errors: string[] = [];
+      for (const row of data) {
+        const matchedCase = cases.find(c => c.case_code === row.case_code);
+        if (!matchedCase) { errors.push(`Case not found: ${row.case_code}`); skipped++; continue; }
+        if (!row.model_name) { errors.push(`Missing model_name for case ${row.case_code}`); skipped++; continue; }
+        const { error } = await supabase.from('llm_outputs').upsert({
+          case_id: matchedCase.id,
+          model_name: row.model_name,
+          model_version: row.model_version || null,
+          model_output_cp1: row.model_output_cp1 || '',
+          model_output_cp2: row.model_output_cp2 || '',
+          model_output_cp3: row.model_output_cp3 || '',
+          model_output_cp4: row.model_output_cp4 || '',
+        }, { onConflict: 'case_id,model_name' });
+        if (error) { errors.push(`Error for ${row.case_code}/${row.model_name}: ${error.message}`); skipped++; }
+        else inserted++;
+      }
+      await load();
+      setBulkImportResult(
+        `✅ Imported ${inserted} LLM outputs successfully.` +
+        (skipped > 0 ? ` ⚠ ${skipped} skipped.` : '') +
+        (errors.length > 0 ? `\nErrors:\n${errors.slice(0, 5).join('\n')}` : '')
+      );
+    } catch (err: any) {
+      setBulkImportResult(`❌ Import failed: ${err.message}`);
+    }
+    setBulkImporting(false);
+    e.target.value = '';
+  }
+
+  // ── One-click bulk auto-assign ───────────────────────────────
+  // Creates assignments for all reviewer × case combinations
+  // where the reviewer is NOT the case contributor.
+  async function bulkAutoAssign() {
+    if (!confirm(
+      `Auto-assign all cases to all reviewers?\n\n` +
+      `This will create assignments for every reviewer × case combination ` +
+      `where the reviewer did not submit the case.\n\n` +
+      `${reviewers.length} reviewers × ${cases.length} cases = up to ${reviewers.length * cases.length} assignments ` +
+      `(minus ${cases.length} cross-validation blocks = ${reviewers.length * cases.length - cases.length} assignments).\n\n` +
+      `Existing assignments will not be overwritten.`
+    )) return;
+    setAutoAssigning(true);
+    setAutoAssignResult(null);
+    let created = 0, skipped = 0, blocked = 0;
+    const now = new Date().toISOString();
+    for (const caseRow of cases) {
+      for (const reviewer of reviewers) {
+        // Block cross-validation violations
+        if (caseRow.contributor_reviewer_id && caseRow.contributor_reviewer_id === reviewer.id) {
+          blocked++;
+          continue;
+        }
+        // Check if assignment already exists
+        const exists = assignments.find(a => a.reviewer_id === reviewer.id && a.case_id === caseRow.id);
+        if (exists) { skipped++; continue; }
+        const { error } = await supabase.from('assignments').insert({
+          reviewer_id: reviewer.id,
+          case_id: caseRow.id,
+          status: 'not_started',
+          questionnaire_enabled: false,
+          updated_at: now,
+        });
+        if (error) { skipped++; }
+        else created++;
+      }
+    }
+    await load();
+    setAutoAssigning(false);
+    setAutoAssignResult(
+      `✅ Created ${created} new assignments. ` +
+      `🚫 Blocked ${blocked} cross-validation violations. ` +
+      (skipped > 0 ? `⚠ ${skipped} skipped (already existed or error).` : '')
+    );
   }
 
   function downloadBlob(filename: string, content: string, type = 'text/csv') {
@@ -445,6 +538,60 @@ export default function AdminPage() {
       {/* ── TAB: Cases & LLMs ── */}
       {activeTab === 'cases' && (
         <>
+          {/* ── Bulk LLM Import ── */}
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Bulk Import LLM Outputs</h2>
+            <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 8 }}>
+              Upload a JSON file to import all LLM outputs at once. Each entry must include
+              <code style={{ background: '#f1eee8', padding: '1px 5px', borderRadius: 4, fontSize: 12 }}> case_code</code>,
+              <code style={{ background: '#f1eee8', padding: '1px 5px', borderRadius: 4, fontSize: 12 }}> model_name</code>, and
+              <code style={{ background: '#f1eee8', padding: '1px 5px', borderRadius: 4, fontSize: 12 }}> model_output_cp1</code> through
+              <code style={{ background: '#f1eee8', padding: '1px 5px', borderRadius: 4, fontSize: 12 }}> model_output_cp4</code>.
+              Existing entries for the same case + model are updated.
+            </p>
+            <div style={{ background: '#f9f8f5', border: '1px solid var(--line)', borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 13 }}>
+              <strong>Expected JSON format:</strong>
+              <pre style={{ marginTop: 6, fontSize: 12, overflowX: 'auto' }}>{`[
+  {
+    "case_code": "CASE_001",
+    "model_name": "GPT-4o",
+    "model_version": "2024-11",
+    "model_output_cp1": "Recommended workup: ...",
+    "model_output_cp2": "Differential diagnosis: ...",
+    "model_output_cp3": "Treatment recommendation: ...",
+    "model_output_cp4": "Complication management: ..."
+  }
+]`}</pre>
+            </div>
+            {bulkImportResult && (
+              <div className={`alert ${bulkImportResult.startsWith('✅') ? 'alert-success' : bulkImportResult.startsWith('⚠') ? 'alert-warn' : 'alert-danger'}`}
+                style={{ marginBottom: 12, whiteSpace: 'pre-wrap' }}>
+                {bulkImportResult}
+              </div>
+            )}
+            <div className="row" style={{ alignItems: 'center', gap: 12 }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="file"
+                  accept=".json"
+                  style={{ display: 'none' }}
+                  onChange={handleBulkLLMImport}
+                  disabled={bulkImporting}
+                />
+                <span className={`btn ${bulkImporting ? 'btn-secondary' : 'btn-primary'}`}>
+                  {bulkImporting ? 'Importing…' : '📂 Upload JSON file'}
+                </span>
+              </label>
+              <a
+                href={`data:application/json,${encodeURIComponent(JSON.stringify([{ case_code: cases[0]?.case_code || 'CASE_001', model_name: 'GPT-4o', model_version: '2024-11', model_output_cp1: '', model_output_cp2: '', model_output_cp3: '', model_output_cp4: '' }], null, 2))}`}
+                download="llm_outputs_template.json"
+                className="btn btn-secondary btn-small"
+              >
+                Download template
+              </a>
+            </div>
+          </div>
+
           {cases.map(caseRow => {
             const outputs = llmOutputs.filter(o => o.case_id === caseRow.id);
             const contributor = reviewers.find(r => r.id === caseRow.contributor_reviewer_id);
@@ -590,6 +737,31 @@ export default function AdminPage() {
               </select>
               <button className="btn btn-primary" onClick={assignCase}>Assign</button>
             </div>
+          </div>
+
+          {/* ── Bulk Auto-Assign ── */}
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Bulk Auto-Assign</h2>
+            <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 12 }}>
+              Automatically creates assignments for all reviewer × case combinations,
+              respecting cross-validation (authors are never assigned their own cases).
+              Existing assignments are not overwritten.
+            </p>
+            {autoAssignResult && (
+              <div className={`alert ${autoAssignResult.startsWith('✅') ? 'alert-success' : 'alert-warn'}`} style={{ marginBottom: 12, whiteSpace: 'pre-wrap' }}>
+                {autoAssignResult}
+              </div>
+            )}
+            <button
+              className="btn btn-primary"
+              onClick={bulkAutoAssign}
+              disabled={autoAssigning || reviewers.length === 0 || cases.length === 0}
+            >
+              {autoAssigning ? 'Assigning…' : `Auto-assign all (${reviewers.length} reviewers × ${cases.length} cases)`}
+            </button>
+            {(reviewers.length === 0 || cases.length === 0) && (
+              <p className="small" style={{ marginTop: 8 }}>Add reviewers and cases first.</p>
+            )}
           </div>
 
           {editReviewer && (

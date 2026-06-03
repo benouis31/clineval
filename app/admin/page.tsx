@@ -1,75 +1,71 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
 function fmt(value?: string) {
   if (!value) return '-';
   return new Date(value).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
-
-function statusLabel(row: any) {
-  if (row.status === 'submitted') return 'Submitted';
-  if (row.status === 'in_progress') return 'In progress';
-  if (row.status === 'assigned') return 'Assigned';
-  return row.status || 'Not started';
-}
-
-function reviewerViewLabel(row: any, caseSubmissionSubmitted: boolean) {
-  if (!row.cases?.is_active) return 'Case inactive';
-  if (!row.questionnaire_enabled) {
-    if (caseSubmissionSubmitted) return 'Case submitted (waiting)';
-    return 'Case Submission Form';
-  }
-  if (row.status === 'submitted') return 'Submitted review';
-  return 'Expert Questionnaire';
-}
-
-function caseSubmissionProgress(caseSubmission: any) {
-  let filled = 0;
-  if (caseSubmission?.diagnosis?.trim()) filled++;
-  if (caseSubmission?.recommended_tests?.trim()) filled++;
-  if (caseSubmission?.confidence_score) filled++;
-  if (caseSubmission?.differential_diagnosis?.trim()) filled++;
-  return { filled, total: 4 };
-}
-
-// FIX: escape double-quotes inside CSV cell values to prevent malformed CSV output
 function csvCell(value: any) {
   return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
 
-// FIX: private_notes_* and _explanation keys inflate the answered count;
-// only count keys that correspond to real question IDs
-function countQuestionnaireAnswers(answers: Record<string, any>) {
-  return Object.entries(answers).filter(([k, v]) =>
-    !k.startsWith('private_notes_') &&
-    !k.endsWith('_explanation') &&
-    v !== undefined && v !== ''
-  ).length;
-}
-
 export default function AdminPage() {
-  const [rows, setRows] = useState<any[]>([]);
   const [reviewers, setReviewers] = useState<any[]>([]);
   const [cases, setCases] = useState<any[]>([]);
+  const [llmOutputs, setLlmOutputs] = useState<any[]>([]);
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [caseSubmissions, setCaseSubmissions] = useState<any[]>([]);
+  const [llmEvaluations, setLlmEvaluations] = useState<any[]>([]);
+  const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
-  const [newReviewer, setNewReviewer] = useState({ code: '', display_name: '', email: '', specialty: 'Hematology' });
-  const [editReviewer, setEditReviewer] = useState<any | null>(null);
-  // FIX: ref to scroll edit panel into view when it opens
-  const editPanelRef = useRef<HTMLDivElement>(null);
-  const [assignReviewerId, setAssignReviewerId] = useState('');
-  const [assignCaseId, setAssignCaseId] = useState('');
-  const [messages, setMessages] = useState<any[]>([]);
-  const [caseSubmissions, setCaseSubmissions] = useState<any[]>([]);
   const [updating, setUpdating] = useState<string | null>(null);
   const [emailStatus, setEmailStatus] = useState<Record<string, 'sending' | 'sent' | 'no-email' | 'error'>>({});
-  // FIX: removed auditLog state — fetched but never rendered, dead dead weight
+  const [activeTab, setActiveTab] = useState<'overview' | 'cases' | 'manage'>('overview');
 
-  // FIX: sessionStorage access on mount is safe because this is a 'use client' component,
-  // but guard with typeof check anyway for safety in edge SSR scenarios
+  // Forms
+  const [newReviewer, setNewReviewer] = useState({ code: '', display_name: '', email: '', specialty: 'Hematology' });
+  const [editReviewer, setEditReviewer] = useState<any | null>(null);
+  const [assignReviewerId, setAssignReviewerId] = useState('');
+  const [assignCaseId, setAssignCaseId] = useState('');
+  const [newLLM, setNewLLM] = useState({ case_id: '', model_name: '', model_version: '', model_output_cp1: '', model_output_cp2: '', model_output_cp3: '', model_output_cp4: '' });
+  const [showLLMForm, setShowLLMForm] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true); setLoadError('');
+    const [
+      { data: revData, error: e1 },
+      { data: caseData, error: e2 },
+      { data: llmData, error: e3 },
+      { data: asgnData, error: e4 },
+      { data: csData, error: e5 },
+      { data: evalData, error: e6 },
+      { data: msgData, error: e7 },
+    ] = await Promise.all([
+      supabase.from('reviewers').select('*').order('created_at'),
+      supabase.from('cases').select('*').order('created_at', { ascending: false }),
+      supabase.from('llm_outputs').select('*').order('model_name'),
+      supabase.from('assignments').select('*, reviewers(*), cases(*)').order('created_at'),
+      supabase.from('case_submissions').select('*'),
+      supabase.from('llm_evaluations').select('*'),
+      supabase.from('reviewer_messages').select('*, reviewers(code,display_name), cases(case_code)').order('created_at', { ascending: false }),
+    ]);
+    const firstError = e1 || e2 || e3 || e4 || e5 || e6 || e7;
+    if (firstError) { setLoadError('Failed to load: ' + firstError.message); setLoading(false); return; }
+    setReviewers(revData || []);
+    setCases(caseData || []);
+    setLlmOutputs(llmData || []);
+    setAssignments(asgnData || []);
+    setCaseSubmissions(csData || []);
+    setLlmEvaluations(evalData || []);
+    setMessages(msgData || []);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, []);
   useEffect(() => {
     if (typeof sessionStorage !== 'undefined') {
       const saved = sessionStorage.getItem('adminSearch');
@@ -77,552 +73,466 @@ export default function AdminPage() {
     }
   }, []);
   useEffect(() => {
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem('adminSearch', search);
-    }
+    if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('adminSearch', search);
   }, [search]);
 
-  // FIX: scroll edit panel into view when editReviewer is set
-  useEffect(() => {
-    if (editReviewer && editPanelRef.current) {
-      editPanelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, [editReviewer]);
+  // ── Stats ──
+  const totalCaseSubmissions = caseSubmissions.filter(cs => cs.status === 'submitted').length;
+  const totalEvalSubmitted = llmEvaluations.filter(e => e.status === 'submitted').length;
+  const totalEvals = llmEvaluations.length;
+  const totalAssignments = assignments.length;
+  const totalCorrections = messages.length;
 
-  async function load() {
-    setLoading(true);
-    setLoadError('');
-    // FIX: removed reviewer_audit_log fetch — state was never used in the render
-    const [
-      { data: assignmentData, error: e1 },
-      { data: reviewerData, error: e2 },
-      { data: caseData, error: e3 },
-      { data: responseData, error: e4 },
-      { data: messageData, error: e5 },
-      { data: caseSubmissionData, error: e6 }
-    ] = await Promise.all([
-      supabase.from('assignments').select('*, reviewers(*), cases(*)'),
-      supabase.from('reviewers').select('*').order('created_at'),
-      supabase.from('cases').select('*').order('created_at', { ascending: false }),
-      supabase.from('responses').select('*'),
-      supabase.from('reviewer_messages').select('*, reviewers(code, display_name), cases(case_code)'),
-      supabase.from('case_submissions').select('*')
-    ]);
-
-    // FIX: was silently ignoring all errors; now surfaces the first failure
-    const firstError = e1 || e2 || e3 || e4 || e5 || e6;
-    if (firstError) {
-      setLoadError('Failed to load data: ' + firstError.message);
-      setLoading(false);
-      return;
-    }
-
-    const uniqueMap = new Map();
-    (assignmentData || []).forEach((a: any) => {
-      const key = `${a.reviewer_id}|${a.case_id}`;
-      const existing = uniqueMap.get(key);
-      if (!existing || new Date(a.updated_at) > new Date(existing.updated_at)) {
-        uniqueMap.set(key, a);
-      }
-    });
-    const deduped = Array.from(uniqueMap.values());
-
-    const responsesMap = new Map((responseData || []).map((r: any) => [r.assignment_id, r]));
-    const merged = deduped.map((a: any) => ({ ...a, response: responsesMap.get(a.id) }));
-    setRows(merged);
-    setReviewers(reviewerData || []);
-    setCases(caseData || []);
-    setMessages(messageData || []);
-    setCaseSubmissions(caseSubmissionData || []);
-    setLoading(false);
-  }
-
-  useEffect(() => { load(); }, []);
-
-  const filteredRows = useMemo(() => {
+  // ── Filtered assignments ──
+  const filteredAssignments = useMemo(() => {
     const q = search.toLowerCase();
-    if (!q) return rows;
-    return rows.filter(r =>
-      r.reviewers?.display_name?.toLowerCase().includes(q) ||
-      r.reviewers?.code?.toLowerCase().includes(q) ||
-      r.cases?.case_code?.toLowerCase().includes(q) ||
-      r.cases?.title?.toLowerCase().includes(q)
+    if (!q) return assignments;
+    return assignments.filter(a =>
+      a.reviewers?.display_name?.toLowerCase().includes(q) ||
+      a.reviewers?.code?.toLowerCase().includes(q) ||
+      a.cases?.case_code?.toLowerCase().includes(q) ||
+      a.cases?.title?.toLowerCase().includes(q)
     );
-  }, [rows, search]);
+  }, [assignments, search]);
 
+  // ── Actions ──
   async function addReviewer() {
     if (!newReviewer.code || !newReviewer.display_name) return alert('Code and name required');
     const { error } = await supabase.from('reviewers').insert(newReviewer);
-    if (error) alert(error.message);
-    else { setNewReviewer({ code: '', display_name: '', email: '', specialty: 'Hematology' }); await load(); }
-  }
-
-  async function saveEditReviewer() {
-    if (!editReviewer) return;
-    const { error } = await supabase.from('reviewers').update({
-      code: editReviewer.code,
-      display_name: editReviewer.display_name,
-      email: editReviewer.email,
-      specialty: editReviewer.specialty,
-    }).eq('id', editReviewer.id);
-    if (error) { alert(error.message); return; }
-    setEditReviewer(null);
+    if (error) return alert(error.message);
+    setNewReviewer({ code: '', display_name: '', email: '', specialty: 'Hematology' });
     await load();
   }
 
   async function assignCase() {
-    if (!assignReviewerId || !assignCaseId) return alert('Select both');
+    if (!assignReviewerId || !assignCaseId) return alert('Select both reviewer and case');
     const { error } = await supabase.from('assignments').upsert({
-      reviewer_id: assignReviewerId,
-      case_id: assignCaseId,
-      status: 'assigned',
-      current_checkpoint: 1,
-      questionnaire_enabled: false,
+      reviewer_id: assignReviewerId, case_id: assignCaseId,
+      status: 'not_started', questionnaire_enabled: false,
       updated_at: new Date().toISOString()
     }, { onConflict: 'reviewer_id,case_id' });
-    if (error) alert(error.message);
-    else { setAssignReviewerId(''); setAssignCaseId(''); await load(); }
+    if (error) return alert(error.message);
+    setAssignReviewerId(''); setAssignCaseId('');
+    await load();
   }
 
   async function toggleCaseActive(caseRow: any, active: boolean) {
     if (!confirm(`${active ? 'Activate' : 'Deactivate'} case ${caseRow.case_code}?`)) return;
     const { error } = await supabase.from('cases').update({ is_active: active }).eq('id', caseRow.id);
-    if (error) alert(error.message);
-    else await load();
+    if (error) return alert(error.message);
+    await load();
   }
 
-  async function toggleQuestionnaire(row: any, enable: boolean) {
-    if (enable && !row.cases?.is_active) {
-      alert('Cannot activate: case is inactive. Please activate the case first.');
-      return;
+  async function toggleQuestionnaire(assignment: any, enable: boolean) {
+    if (enable && !assignment.cases?.is_active) {
+      return alert('Cannot activate: case is inactive. Please activate the case first.');
     }
-    setUpdating(row.id);
-    const { error } = await supabase.from('assignments').update({ questionnaire_enabled: enable }).eq('id', row.id);
+    setUpdating(assignment.id);
+    const { error } = await supabase.from('assignments').update({ questionnaire_enabled: enable }).eq('id', assignment.id);
     if (error) alert(error.message);
     await load();
     setUpdating(null);
   }
 
-  async function resetAssignment(row: any) {
-    if (!confirm(`Reset assignment for ${row.reviewers?.code}? This will delete questionnaire answers and case submission, and reset checkpoint.`)) return;
-    setUpdating(row.id);
-    await supabase.from('assignments').update({
-      status: 'assigned', current_checkpoint: 1, questionnaire_enabled: false
-    }).eq('id', row.id);
-    await supabase.from('responses').delete().eq('assignment_id', row.id);
-    // FIX: was not deleting case_submissions row on reset, leaving stale "Submitted" state
-    // that would immediately re-enable the questionnaire on next load
-    await supabase.from('case_submissions').delete().eq('assignment_id', row.id);
+  async function resetAssignment(assignment: any) {
+    if (!confirm(`Reset all data for ${assignment.reviewers?.code} on ${assignment.cases?.case_code}? This deletes all answers and Task 1 submission.`)) return;
+    setUpdating(assignment.id);
+    await supabase.from('assignments').update({ status: 'not_started', questionnaire_enabled: false, updated_at: new Date().toISOString() }).eq('id', assignment.id);
+    await supabase.from('case_submissions').delete().eq('assignment_id', assignment.id);
+    await supabase.from('llm_evaluations').delete().eq('assignment_id', assignment.id);
     await load();
     setUpdating(null);
+  }
+
+  async function addLLMOutput() {
+    if (!newLLM.case_id || !newLLM.model_name) return alert('Case and model name required');
+    const { error } = await supabase.from('llm_outputs').insert({
+      case_id: newLLM.case_id, model_name: newLLM.model_name, model_version: newLLM.model_version || null,
+      model_output_cp1: newLLM.model_output_cp1, model_output_cp2: newLLM.model_output_cp2,
+      model_output_cp3: newLLM.model_output_cp3, model_output_cp4: newLLM.model_output_cp4,
+    });
+    if (error) return alert(error.message);
+    setNewLLM({ case_id: '', model_name: '', model_version: '', model_output_cp1: '', model_output_cp2: '', model_output_cp3: '', model_output_cp4: '' });
+    setShowLLMForm(null);
+    await load();
+  }
+
+  async function deleteLLMOutput(id: string, modelName: string) {
+    if (!confirm(`Delete LLM output "${modelName}"? This will also delete all evaluations for this output.`)) return;
+    await supabase.from('llm_outputs').delete().eq('id', id);
+    await load();
+  }
+
+  async function reminderEmail(assignment: any) {
+    const email = assignment.reviewers?.email;
+    if (!email) { setEmailStatus(s => ({ ...s, [assignment.id]: 'no-email' })); return; }
+    setEmailStatus(s => ({ ...s, [assignment.id]: 'sending' }));
+    try {
+      const res = await fetch('/api/send-reminder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewerName: assignment.reviewers?.display_name, reviewerCode: assignment.reviewers?.code, reviewerEmail: email, caseCode: assignment.cases?.case_code }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Failed');
+      setEmailStatus(s => ({ ...s, [assignment.id]: 'sent' }));
+    } catch (err: any) {
+      setEmailStatus(s => ({ ...s, [assignment.id]: 'error' }));
+    }
   }
 
   function exportCsv() {
-    const headers = ['assignment_id', 'reviewer_code', 'reviewer_name', 'case_code', 'case_title', 'status', 'questionnaire_enabled', 'case_submission_status', 'last_active'];
-    const body = rows.map(r => {
-      const submission = caseSubmissions.find(cs => cs.assignment_id === r.id);
-      return [
-        r.id, r.reviewers?.code, r.reviewers?.display_name,
-        r.cases?.case_code, r.cases?.title,
-        r.status, r.questionnaire_enabled,
-        submission?.status || 'none', r.updated_at
-      ];
+    const headers = ['reviewer_code', 'reviewer_name', 'case_code', 'case_title', 'task1_status', 'model_name', 'eval_status', 'answers_count'];
+    const rows: any[] = [];
+    assignments.forEach(a => {
+      const cs = caseSubmissions.find(s => s.assignment_id === a.id);
+      const outputs = llmOutputs.filter(o => o.case_id === a.case_id);
+      if (outputs.length === 0) {
+        rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, cs?.status || 'not_started', '-', '-', 0]);
+      } else {
+        outputs.forEach(o => {
+          const ev = llmEvaluations.find(e => e.assignment_id === a.id && e.llm_output_id === o.id);
+          rows.push([a.reviewers?.code, a.reviewers?.display_name, a.cases?.case_code, a.cases?.title, cs?.status || 'not_started', o.model_name, ev?.status || 'not_started', ev?.answers ? Object.keys(ev.answers).length : 0]);
+        });
+      }
     });
-    // FIX: was using template literal `"${cell}"` with no quote escaping inside values;
-    // replaced with csvCell() which escapes internal double-quotes correctly
-    const csv = [headers, ...body].map(row => row.map(csvCell).join(',')).join('\n');
+    const csv = [headers, ...rows].map(r => r.map(csvCell).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
-    // FIX: same download reliability fix as reviewer page — defer revokeObjectURL
     const a = document.createElement('a');
-    a.href = url;
-    a.download = 'clineval_assignments.csv';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    a.href = url; a.download = 'clineval_progress.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  async function reminderEmail(row: any) {
-    const email = row.reviewers?.email;
-    if (!email) {
-      setEmailStatus(s => ({ ...s, [row.id]: 'no-email' }));
-      return;
-    }
-    setEmailStatus(s => ({ ...s, [row.id]: 'sending' as any }));
-    try {
-      const res = await fetch('/api/send-reminder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reviewerName: row.reviewers?.display_name || row.reviewers?.code,
-          reviewerCode: row.reviewers?.code,
-          reviewerEmail: email,
-          caseCode: row.cases?.case_code,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Failed to send');
-      setEmailStatus(s => ({ ...s, [row.id]: 'sent' }));
-      supabase.from('reviewer_audit_log').insert({
-        assignment_id: row.id,
-        reviewer_id: row.reviewer_id,
-        case_id: row.case_id,
-        event_type: 'reminder_email_sent',
-        created_at: new Date().toISOString()
-      });
-    } catch (err: any) {
-      setEmailStatus(s => ({ ...s, [row.id]: 'error' as any }));
-      alert('Failed to send email: ' + err.message);
-    }
-  }
-
-  // Stats for summary bar
-  const totalReviewers = reviewers.length;
-  const totalSubmitted = rows.filter(r => r.status === 'submitted').length;
-  const totalInProgress = rows.filter(r => r.status === 'in_progress').length;
-  const totalAssigned = rows.filter(r => r.status === 'assigned' || r.status === 'not_started').length;
-  const totalCorrections = messages.length;
+  const tabs = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'cases', label: 'Cases & LLMs' },
+    { id: 'manage', label: 'Manage' },
+  ];
 
   return (
     <main className="container-wide">
+      {/* Header */}
       <div className="card" style={{ marginBottom: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <h1 style={{ margin: 0, fontSize: 22 }}>ClinEval Admin Dashboard</h1>
+          <h1 style={{ margin: 0, fontSize: 22 }}>ClinEval Admin</h1>
           <div className="row">
-            <button className="btn btn-secondary btn-small" onClick={load} disabled={loading}>
-              {loading ? 'Loading…' : 'Refresh'}
-            </button>
+            <button className="btn btn-secondary btn-small" onClick={load} disabled={loading}>{loading ? 'Loading…' : 'Refresh'}</button>
             <button className="btn btn-primary btn-small" onClick={exportCsv}>Export CSV</button>
           </div>
         </div>
         {loadError && <div className="alert alert-warn" style={{ marginTop: 10 }}>{loadError}</div>}
+
+        {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10, marginTop: 16 }}>
           {[
-            { label: 'Reviewers', value: totalReviewers, color: 'var(--text)' },
-            { label: 'Submitted', value: totalSubmitted, color: 'var(--accent)' },
-            { label: 'In progress', value: totalInProgress, color: 'var(--warn)' },
-            { label: 'Assigned', value: totalAssigned, color: 'var(--muted)' },
+            { label: 'Reviewers', value: reviewers.length, color: 'var(--text)' },
+            { label: 'Cases', value: cases.length, color: 'var(--text)' },
+            { label: 'LLM outputs', value: llmOutputs.length, color: 'var(--text)' },
+            { label: 'Task 1 done', value: `${totalCaseSubmissions}/${totalAssignments}`, color: totalCaseSubmissions === totalAssignments && totalAssignments > 0 ? 'var(--accent)' : 'var(--warn)' },
+            { label: 'Evaluations', value: `${totalEvalSubmitted}/${totalEvals}`, color: totalEvalSubmitted === totalEvals && totalEvals > 0 ? 'var(--accent)' : 'var(--warn)' },
             { label: 'Corrections', value: totalCorrections, color: totalCorrections > 0 ? 'var(--danger)' : 'var(--muted)' },
           ].map(s => (
             <div key={s.label} style={{ background: '#f9f8f5', borderRadius: 10, padding: '12px 14px', border: '1px solid var(--line)' }}>
-              <div style={{ fontSize: 26, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: s.color, lineHeight: 1 }}>{s.value}</div>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>{s.label}</div>
             </div>
           ))}
         </div>
-      </div>
 
-      <div className="card">
-        <h2>Reviewers</h2>
-        <div className="row" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-          <input
-            className="input"
-            style={{ flex: '1 1 100px' }}
-            placeholder="Code"
-            value={newReviewer.code}
-            onChange={e => setNewReviewer({ ...newReviewer, code: e.target.value })}
-          />
-          <input
-            className="input"
-            style={{ flex: '2 1 140px' }}
-            placeholder="Name"
-            value={newReviewer.display_name}
-            onChange={e => setNewReviewer({ ...newReviewer, display_name: e.target.value })}
-          />
-          <input
-            className="input"
-            style={{ flex: '2 1 140px' }}
-            placeholder="Email"
-            value={newReviewer.email}
-            onChange={e => setNewReviewer({ ...newReviewer, email: e.target.value })}
-          />
-          <input
-            className="input"
-            style={{ flex: '1 1 100px' }}
-            placeholder="Specialty"
-            value={newReviewer.specialty}
-            onChange={e => setNewReviewer({ ...newReviewer, specialty: e.target.value })}
-          />
-          <button className="btn btn-primary" onClick={addReviewer}>+ Add Reviewer</button>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table className="table">
-            <thead>
-              <tr><th>Code</th><th>Name</th><th>Email</th><th>Specialty</th><th>Action</th></tr>
-            </thead>
-            <tbody>
-              {reviewers.map(r => (
-                <tr key={r.id}>
-                  <td><strong>{r.code}</strong></td>
-                  <td>{r.display_name}</td>
-                  <td>{r.email || '-'}</td>
-                  <td>{r.specialty || '-'}</td>
-                  <td>
-                    <button className="btn btn-secondary btn-small" onClick={() => setEditReviewer(r)}>
-                      Edit
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--line)', marginTop: 20 }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id as any)}
+              style={{ padding: '10px 20px', border: 'none', background: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600,
+                color: activeTab === t.id ? 'var(--accent)' : 'var(--muted)',
+                borderBottom: activeTab === t.id ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: -1 }}>
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      <div className="card">
-        <h2>Assign Case to Reviewer</h2>
-        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
-          <select
-            className="input"
-            style={{ flex: '1 1 180px' }}
-            value={assignReviewerId}
-            onChange={e => setAssignReviewerId(e.target.value)}
-          >
-            <option value="">Select reviewer</option>
-            {reviewers.map(r => <option key={r.id} value={r.id}>{r.code} – {r.display_name}</option>)}
-          </select>
-          <select
-            className="input"
-            style={{ flex: '1 1 180px' }}
-            value={assignCaseId}
-            onChange={e => setAssignCaseId(e.target.value)}
-          >
-            <option value="">Select case</option>
-            {cases.map(c => <option key={c.id} value={c.id}>{c.case_code} – {c.title}</option>)}
-          </select>
-          <button className="btn btn-primary" onClick={assignCase}>Assign</button>
-        </div>
-      </div>
+      {/* ── TAB: Overview ── */}
+      {activeTab === 'overview' && (
+        <>
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Assignments & Progress</h2>
+            <input className="input" placeholder="Search reviewer or case..." value={search} onChange={e => setSearch(e.target.value)} style={{ marginBottom: 16 }} />
+            <p className="small" style={{ marginBottom: 8 }}>* Activate Q without Task 1 submission = admin override.</p>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table" style={{ minWidth: 800, tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 140 }} /><col style={{ width: 160 }} /><col style={{ width: 90 }} />
+                  <col style={{ width: 90 }} /><col style={{ width: 200 }} /><col style={{ width: 180 }} />
+                </colgroup>
+                <thead>
+                  <tr><th>Reviewer</th><th>Case</th><th>Task 1</th><th>Q active</th><th>LLM Evaluations</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {filteredAssignments.map(assignment => {
+                    const cs = caseSubmissions.find(s => s.assignment_id === assignment.id);
+                    const task1Done = cs?.status === 'submitted';
+                    const caseActive = assignment.cases?.is_active;
+                    const outputs = llmOutputs.filter(o => o.case_id === assignment.case_id);
+                    const evals = llmEvaluations.filter(e => e.assignment_id === assignment.id);
+                    const submitted = evals.filter(e => e.status === 'submitted').length;
+                    const emailSt = emailStatus[assignment.id];
 
-      <div className="card">
-        <h2>Assignments &amp; Controls</h2>
-        <input
-          className="input"
-          placeholder="Search by reviewer or case..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ marginBottom: 16 }}
-        />
-        <div style={{ overflowX: 'auto' }}>
-          <p className="small" style={{ marginBottom: 8 }}>* Activate Q marked with asterisk means Task 1 not yet submitted — admin override.</p>
-          <table className="table" style={{ minWidth: 680, tableLayout: 'fixed' }}>
-            <colgroup>
-              <col style={{ width: 150 }} />
-              <col style={{ width: 200 }} />
-              <col style={{ width: 110 }} />
-              <col style={{ width: 110 }} />
-              <col style={{ width: 150 }} />
-              <col style={{ width: 180 }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Reviewer</th>
-                <th>Case</th>
-                <th>Status</th>
-                <th>Task 1</th>
-                <th>Progress</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map(row => {
-                const submission = caseSubmissions.find(cs => cs.assignment_id === row.id);
-                const caseSubmissionDone = submission?.status === 'submitted';
-                const caseActive = row.cases?.is_active;
-                const questionnaireEnabled = row.questionnaire_enabled;
-                const isSubmitted = row.status === 'submitted';
-                const { filled, total } = caseSubmissionProgress(submission);
-                const caseProgressPercent = Math.round((filled / total) * 100);
-                // FIX: was counting all non-empty answer keys including private_notes_* and
-                // _explanation suffixes, inflating the count vs the ~30 denominator
-                const answeredCount = row.response?.answers
-                  ? countQuestionnaireAnswers(row.response.answers)
-                  : 0;
-                const questionnaireTotal = 30;
-                const questionnairePercent = Math.round((answeredCount / questionnaireTotal) * 100);
-
-                return (
-                  <tr key={row.id} className={!caseActive ? 'row-inactive' : ''}>
-                    <td>
-                      <strong>{row.reviewers?.display_name || '-'}</strong><br />
-                      <span className="small">{row.reviewers?.code}</span>
-                    </td>
-                    <td>
-                      <strong>{row.cases?.case_code}</strong><br />
-                      <span className="small" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.cases?.title}</span>
-                      {caseActive
-                        ? <span className="status-pill status-submitted">Active</span>
-                        : <span className="status-pill status-assigned">Inactive</span>}
-                    </td>
-                    <td>
-                      <span className={`status-pill status-${row.status || 'not_started'}`}>
-                        {statusLabel(row)}
-                      </span>
-                    </td>
-                    <td>
-                      {!submission ? (
-                        <span className="status-pill status-assigned">Not started</span>
-                      ) : caseSubmissionDone ? (
-                        <span className="status-pill status-submitted">Submitted</span>
-                      ) : (
-                        <>
-                          <span className="status-pill status-in_progress">Draft</span>
-                          <div className="mini-progress" style={{ marginTop: 4 }}>
-                            <div className="mini-progress-fill" style={{ width: `${caseProgressPercent}%` }} />
-                          </div>
-                          <span className="small">{filled}/{total} fields</span>
-                        </>
-                      )}
-                    </td>
-                    <td>
-                      {questionnaireEnabled ? (
-                        <>
-                          <div className="mini-progress">
-                            <div className="mini-progress-fill" style={{ width: `${questionnairePercent}%` }} />
-                          </div>
-                          <span className="small">{answeredCount} / ~{questionnaireTotal} answered</span>
-                        </>
-                      ) : <span className="small">—</span>}
-                    </td>
-                    <td>
-                      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                        {!caseActive && (
-                          <button
-                            className="btn btn-primary btn-small"
-                            onClick={() => toggleCaseActive(row.cases, true)}
-                            disabled={updating === row.id}
-                          >
-                            Activate case
-                          </button>
-                        )}
-                        {caseActive && !isSubmitted && (
-                          <>
-                            {!questionnaireEnabled ? (
-                              <button
-                                className="btn btn-primary btn-small"
-                                disabled={updating === row.id}
-                                onClick={() => toggleQuestionnaire(row, true)}
-                                title={!caseSubmissionDone ? 'Task 1 not yet submitted by reviewer' : 'Activate expert questionnaire'}
-                              >
-                                Activate Q{!caseSubmissionDone ? ' *' : ''}
-                              </button>
+                    return (
+                      <tr key={assignment.id} className={!caseActive ? 'row-inactive' : ''}>
+                        <td>
+                          <strong>{assignment.reviewers?.display_name || '-'}</strong><br />
+                          <span className="small">{assignment.reviewers?.code}</span>
+                        </td>
+                        <td>
+                          <strong>{assignment.cases?.case_code}</strong><br />
+                          <span className="small" style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{assignment.cases?.title}</span>
+                          <span className={`status-pill ${caseActive ? 'status-submitted' : 'status-assigned'}`}>{caseActive ? 'Active' : 'Inactive'}</span>
+                        </td>
+                        <td>
+                          {task1Done
+                            ? <span className="status-pill status-submitted">Done</span>
+                            : <span className="status-pill status-assigned">{cs ? 'Draft' : 'Not started'}</span>}
+                        </td>
+                        <td>
+                          {assignment.questionnaire_enabled
+                            ? <span className="status-pill status-submitted">Yes</span>
+                            : <span className="status-pill status-assigned">No</span>}
+                        </td>
+                        <td>
+                          {outputs.length === 0 ? (
+                            <span className="small">No LLMs added</span>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                              {outputs.map(o => {
+                                const ev = evals.find(e => e.llm_output_id === o.id);
+                                const st = ev?.status || 'not_started';
+                                return (
+                                  <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span className={`status-pill ${st === 'submitted' ? 'status-submitted' : st === 'in_progress' ? 'status-in_progress' : 'status-assigned'}`} style={{ fontSize: 10 }}>
+                                      {st === 'submitted' ? '✓' : st === 'in_progress' ? '…' : '○'}
+                                    </span>
+                                    <span style={{ fontSize: 12 }}>{o.model_name}</span>
+                                  </div>
+                                );
+                              })}
+                              <span className="small">{submitted}/{outputs.length} submitted</span>
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+                            {!caseActive ? (
+                              <button className="btn btn-primary btn-small" disabled={updating === assignment.id} onClick={() => toggleCaseActive(assignment.cases, true)}>Activate case</button>
                             ) : (
-                              <button
-                                className="btn btn-secondary btn-small"
-                                onClick={() => toggleQuestionnaire(row, false)}
-                                disabled={updating === row.id}
-                              >
-                                Deactivate Q
-                              </button>
+                              <>
+                                {!assignment.questionnaire_enabled ? (
+                                  <button className="btn btn-primary btn-small" disabled={updating === assignment.id} onClick={() => toggleQuestionnaire(assignment, true)}
+                                    title={!task1Done ? 'Task 1 not submitted — admin override' : ''}>
+                                    Activate Q{!task1Done ? ' *' : ''}
+                                  </button>
+                                ) : (
+                                  <button className="btn btn-secondary btn-small" disabled={updating === assignment.id} onClick={() => toggleQuestionnaire(assignment, false)}>Deactivate Q</button>
+                                )}
+                                <button className="btn btn-secondary btn-small" disabled={updating === assignment.id} onClick={() => resetAssignment(assignment)}>Reset</button>
+                                {emailSt === 'no-email' ? <span className="small" style={{ color: 'var(--danger)' }}>No email</span>
+                                  : emailSt === 'sending' ? <span className="small" style={{ color: 'var(--muted)' }}>Sending…</span>
+                                  : emailSt === 'sent' ? <span className="small" style={{ color: 'var(--accent)' }}>✓ Sent</span>
+                                  : emailSt === 'error' ? <button className="btn btn-secondary btn-small" style={{ color: 'var(--danger)' }} onClick={() => reminderEmail(assignment)}>Retry</button>
+                                  : <button className="btn btn-secondary btn-small" onClick={() => reminderEmail(assignment)} title={assignment.reviewers?.email || 'No email'}>Email</button>}
+                              </>
                             )}
-                            <button
-                              className="btn btn-secondary btn-small"
-                              onClick={() => resetAssignment(row)}
-                              disabled={updating === row.id}
-                            >
-                              Reset
-                            </button>
-                            {emailStatus[row.id] === 'no-email' ? (
-                              <span className="small" style={{ color: 'var(--danger)' }}>No email on file</span>
-                            ) : emailStatus[row.id] === 'sending' ? (
-                              <span className="small" style={{ color: 'var(--muted)' }}>Sending…</span>
-                            ) : emailStatus[row.id] === 'sent' ? (
-                              <span className="small" style={{ color: 'var(--accent)' }}>✓ Sent</span>
-                            ) : emailStatus[row.id] === 'error' ? (
-                              <button className="btn btn-secondary btn-small" style={{ color: 'var(--danger)' }} onClick={() => reminderEmail(row)}>
-                                Retry
-                              </button>
-                            ) : (
-                              <button
-                                className="btn btn-secondary btn-small"
-                                onClick={() => reminderEmail(row)}
-                                title={row.reviewers?.email || 'No email on file'}
-                                disabled={!row.reviewers?.email}
-                              >
-                                Email
-                              </button>
-                            )}
-                          </>
-                        )}
-                        {isSubmitted && <span className="small">Complete</span>}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {filteredRows.length === 0 && (
-                <tr><td colSpan={7} style={{ color: 'var(--muted)' }}>No assignments match your search.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>Correction Requests</h2>
-        {/* FIX: show total count so hidden messages are visible at a glance */}
-        {messages.length === 0 ? (
-          <p className="small">None</p>
-        ) : (
-          <>
-            {messages.length > 5 && (
-              <p className="small" style={{ marginBottom: 8 }}>
-                Showing all {messages.length} requests
-              </p>
-            )}
-            <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-              {messages.map(m => (
-                <div key={m.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
-                  <strong>{m.reviewers?.code}</strong> on {m.cases?.case_code}: {m.message}{' '}
-                  <span className="small">({fmt(m.created_at)})</span>
-                </div>
-              ))}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredAssignments.length === 0 && <tr><td colSpan={6} style={{ color: 'var(--muted)' }}>No assignments match your search.</td></tr>}
+                </tbody>
+              </table>
             </div>
-          </>
-        )}
-      </div>
+          </div>
 
-      {/* FIX: edit panel now has a ref so it can be scrolled into view on open;
-          also extracted save logic into saveEditReviewer() with error handling */}
-      {editReviewer && (
-        <div className="card" ref={editPanelRef}>
-          <h2>Edit Reviewer — {editReviewer.code}</h2>
-          <div className="row" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-            <input
-              className="input"
-              style={{ flex: '1 1 100px' }}
-              placeholder="Code"
-              value={editReviewer.code}
-              onChange={e => setEditReviewer({ ...editReviewer, code: e.target.value })}
-            />
-            <input
-              className="input"
-              style={{ flex: '2 1 140px' }}
-              placeholder="Name"
-              value={editReviewer.display_name}
-              onChange={e => setEditReviewer({ ...editReviewer, display_name: e.target.value })}
-            />
-            <input
-              className="input"
-              style={{ flex: '2 1 140px' }}
-              placeholder="Email"
-              value={editReviewer.email || ''}
-              onChange={e => setEditReviewer({ ...editReviewer, email: e.target.value })}
-            />
-            <input
-              className="input"
-              style={{ flex: '1 1 100px' }}
-              placeholder="Specialty"
-              value={editReviewer.specialty || ''}
-              onChange={e => setEditReviewer({ ...editReviewer, specialty: e.target.value })}
-            />
+          {/* Corrections */}
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Correction Requests</h2>
+            {messages.length === 0 ? <p className="small">None</p> : (
+              <>
+                {messages.length > 5 && <p className="small" style={{ marginBottom: 8 }}>Showing all {messages.length} requests</p>}
+                <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                  {messages.map(m => (
+                    <div key={m.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--line)' }}>
+                      <strong>{m.reviewers?.code}</strong> on {m.cases?.case_code}: {m.message}{' '}
+                      <span className="small">({fmt(m.created_at)})</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
-          <div className="row">
-            <button className="btn btn-primary" onClick={saveEditReviewer}>Save</button>
-            <button className="btn btn-secondary" onClick={() => setEditReviewer(null)}>Cancel</button>
+        </>
+      )}
+
+      {/* ── TAB: Cases & LLMs ── */}
+      {activeTab === 'cases' && (
+        <>
+          {cases.map(caseRow => {
+            const outputs = llmOutputs.filter(o => o.case_id === caseRow.id);
+            return (
+              <div key={caseRow.id} className="card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+                  <div>
+                    <h2 style={{ margin: 0, fontSize: 18 }}>{caseRow.case_code}</h2>
+                    <div style={{ color: 'var(--muted)', fontSize: 14, marginTop: 2 }}>{caseRow.title}</div>
+                    <div style={{ marginTop: 6 }}>
+                      <span className="small">{caseRow.disease_category} · {caseRow.difficulty_level}</span>
+                    </div>
+                  </div>
+                  <div className="row">
+                    <span className={`status-pill ${caseRow.is_active ? 'status-submitted' : 'status-assigned'}`}>{caseRow.is_active ? 'Active' : 'Inactive'}</span>
+                    {caseRow.is_active
+                      ? <button className="btn btn-secondary btn-small" onClick={() => toggleCaseActive(caseRow, false)}>Deactivate</button>
+                      : <button className="btn btn-primary btn-small" onClick={() => toggleCaseActive(caseRow, true)}>Activate</button>}
+                  </div>
+                </div>
+
+                {/* LLM outputs for this case */}
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <strong style={{ fontSize: 14 }}>LLM Outputs ({outputs.length})</strong>
+                    <button className="btn btn-primary btn-small" onClick={() => setShowLLMForm(showLLMForm === caseRow.id ? null : caseRow.id)}>
+                      {showLLMForm === caseRow.id ? 'Cancel' : '+ Add LLM Output'}
+                    </button>
+                  </div>
+                  {outputs.length === 0 ? (
+                    <p className="small">No LLM outputs added yet.</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {outputs.map(o => {
+                        const evalCount = llmEvaluations.filter(e => e.llm_output_id === o.id).length;
+                        const submittedCount = llmEvaluations.filter(e => e.llm_output_id === o.id && e.status === 'submitted').length;
+                        return (
+                          <div key={o.id} style={{ background: '#f9f8f5', border: '1px solid var(--line)', borderRadius: 10, padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                            <div>
+                              <strong style={{ fontSize: 14 }}>{o.model_name}</strong>
+                              {o.model_version && <span style={{ color: 'var(--muted)', fontSize: 12, marginLeft: 6 }}>{o.model_version}</span>}
+                              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2 }}>{submittedCount}/{evalCount} evaluations submitted</div>
+                            </div>
+                            <button className="btn btn-secondary btn-small" style={{ color: 'var(--danger)' }} onClick={() => deleteLLMOutput(o.id, o.model_name)}>Delete</button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Add LLM form */}
+                  {showLLMForm === caseRow.id && (
+                    <div style={{ marginTop: 12, background: 'var(--accent-light)', border: '1px solid #a8d5bc', borderRadius: 12, padding: 16 }}>
+                      <h3 style={{ marginTop: 0, fontSize: 15 }}>Add LLM Output for {caseRow.case_code}</h3>
+                      <div className="row" style={{ marginBottom: 10 }}>
+                        <input className="input" placeholder="Model name (e.g. GPT-4o)" style={{ flex: 2 }}
+                          value={newLLM.model_name}
+                          onChange={e => setNewLLM(n => ({ ...n, model_name: e.target.value, case_id: caseRow.id }))} />
+                        <input className="input" placeholder="Version (optional)" style={{ flex: 1 }}
+                          value={newLLM.model_version}
+                          onChange={e => setNewLLM(n => ({ ...n, model_version: e.target.value }))} />
+                      </div>
+                      {['cp1', 'cp2', 'cp3', 'cp4'].map((cp, i) => (
+                        <div key={cp} style={{ marginBottom: 10 }}>
+                          <label style={{ fontSize: 13, fontWeight: 600, marginBottom: 4, display: 'block' }}>Checkpoint {i + 1} output</label>
+                          <textarea className="input" placeholder={`Model output for checkpoint ${i + 1}…`}
+                            value={(newLLM as any)[`model_output_${cp}`]}
+                            onChange={e => setNewLLM(n => ({ ...n, [`model_output_${cp}`]: e.target.value, case_id: caseRow.id }))} />
+                        </div>
+                      ))}
+                      <div className="row">
+                        <button className="btn btn-primary" onClick={addLLMOutput} disabled={!newLLM.model_name}>Save LLM Output</button>
+                        <button className="btn btn-secondary" onClick={() => setShowLLMForm(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {cases.length === 0 && (
+            <div className="card" style={{ textAlign: 'center', padding: 40, color: 'var(--muted)' }}>
+              No cases yet. Cases are added via the case submission form at /case-submission.
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── TAB: Manage ── */}
+      {activeTab === 'manage' && (
+        <>
+          {/* Reviewers */}
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Reviewers</h2>
+            <div className="row" style={{ marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+              <input className="input" style={{ flex: '1 1 100px' }} placeholder="Code" value={newReviewer.code} onChange={e => setNewReviewer({ ...newReviewer, code: e.target.value })} />
+              <input className="input" style={{ flex: '2 1 140px' }} placeholder="Name" value={newReviewer.display_name} onChange={e => setNewReviewer({ ...newReviewer, display_name: e.target.value })} />
+              <input className="input" style={{ flex: '2 1 140px' }} placeholder="Email" value={newReviewer.email} onChange={e => setNewReviewer({ ...newReviewer, email: e.target.value })} />
+              <input className="input" style={{ flex: '1 1 100px' }} placeholder="Specialty" value={newReviewer.specialty} onChange={e => setNewReviewer({ ...newReviewer, specialty: e.target.value })} />
+              <button className="btn btn-primary" onClick={addReviewer}>+ Add</button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="table">
+                <thead><tr><th>Code</th><th>Name</th><th>Email</th><th>Specialty</th><th>Action</th></tr></thead>
+                <tbody>
+                  {reviewers.map(r => (
+                    <tr key={r.id}>
+                      <td><strong>{r.code}</strong></td>
+                      <td>{r.display_name}</td>
+                      <td>{r.email || '-'}</td>
+                      <td>{r.specialty || '-'}</td>
+                      <td><button className="btn btn-secondary btn-small" onClick={() => setEditReviewer(r)}>Edit</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+
+          {/* Assign case */}
+          <div className="card">
+            <h2 style={{ marginTop: 0 }}>Assign Case to Reviewer</h2>
+            <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <select className="input" style={{ flex: '1 1 180px' }} value={assignReviewerId} onChange={e => setAssignReviewerId(e.target.value)}>
+                <option value="">Select reviewer</option>
+                {reviewers.map(r => <option key={r.id} value={r.id}>{r.code} – {r.display_name}</option>)}
+              </select>
+              <select className="input" style={{ flex: '1 1 180px' }} value={assignCaseId} onChange={e => setAssignCaseId(e.target.value)}>
+                <option value="">Select case</option>
+                {cases.map(c => <option key={c.id} value={c.id}>{c.case_code} – {c.title}</option>)}
+              </select>
+              <button className="btn btn-primary" onClick={assignCase}>Assign</button>
+            </div>
+          </div>
+
+          {/* Edit reviewer */}
+          {editReviewer && (
+            <div className="card">
+              <h2 style={{ marginTop: 0 }}>Edit — {editReviewer.code}</h2>
+              <div className="row" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                <input className="input" style={{ flex: '1 1 100px' }} value={editReviewer.code} onChange={e => setEditReviewer({ ...editReviewer, code: e.target.value })} />
+                <input className="input" style={{ flex: '2 1 140px' }} value={editReviewer.display_name} onChange={e => setEditReviewer({ ...editReviewer, display_name: e.target.value })} />
+                <input className="input" style={{ flex: '2 1 140px' }} value={editReviewer.email || ''} onChange={e => setEditReviewer({ ...editReviewer, email: e.target.value })} />
+                <input className="input" style={{ flex: '1 1 100px' }} value={editReviewer.specialty || ''} onChange={e => setEditReviewer({ ...editReviewer, specialty: e.target.value })} />
+              </div>
+              <div className="row">
+                <button className="btn btn-primary" onClick={async () => {
+                  const { error } = await supabase.from('reviewers').update({ code: editReviewer.code, display_name: editReviewer.display_name, email: editReviewer.email, specialty: editReviewer.specialty }).eq('id', editReviewer.id);
+                  if (error) return alert(error.message);
+                  setEditReviewer(null); await load();
+                }}>Save</button>
+                <button className="btn btn-secondary" onClick={() => setEditReviewer(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </main>
   );
